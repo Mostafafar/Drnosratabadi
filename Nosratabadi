@@ -1,0 +1,333 @@
+cat > pharmacy.py << 'EOF'
+# -*- coding: utf-8 -*-
+import json
+import os
+from datetime import datetime
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
+from functools import wraps
+
+app = Flask(__name__)
+app.secret_key = 'pharmacy-secret-key-2024'
+app.config['JSON_AS_ASCII'] = False
+
+DATA_FILE = 'pharmacy_data.json'
+
+# ============== دیتابیس پیش‌فرض ==============
+DEFAULT_DATA = {
+    "drugs": [],
+    "companies": ["داروپخش", "البرز", "اکسیر", "رازی"],
+    "orders": [],
+    "inventory": [],
+    "next_id": 1,
+    "inventory_next_id": 1
+}
+
+def load_data():
+    try:
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        save_data(DEFAULT_DATA)
+        return DEFAULT_DATA.copy()
+
+def save_data(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+# ============== HTML قالب اصلی ==============
+BASE_HTML = '''
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>داروخانه</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Tahoma','Segoe UI',sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
+.sidebar{position:fixed;right:0;top:0;width:260px;height:100vh;background:#1a1a2e;color:white;z-index:1000;overflow-y:auto}
+.sidebar-header{padding:25px 20px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.1)}
+.sidebar-header h2{color:white}
+.sidebar-header span{color:#667eea}
+.sidebar-header p{font-size:12px;color:rgba(255,255,255,0.6);margin-top:8px}
+.sidebar-menu{list-style:none;padding:0}
+.sidebar-menu li{margin-bottom:5px}
+.sidebar-menu a{display:flex;align-items:center;gap:15px;padding:14px 25px;color:rgba(255,255,255,0.8);text-decoration:none;transition:all 0.3s}
+.sidebar-menu a:hover{background:rgba(102,126,234,0.3);color:white}
+.sidebar-menu a.active{background:linear-gradient(90deg,#667eea 0%,#764ba2 100%);color:white}
+.sidebar-menu .icon{font-size:20px;width:35px}
+.main-content{margin-right:280px;padding:20px;min-height:100vh}
+.top-header{background:white;border-radius:15px;padding:15px 25px;margin-bottom:25px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 5px 20px rgba(0,0,0,0.1)}
+.page-title{color:#2c3e50;font-size:22px;font-weight:bold}
+.logout-btn{background:#e74c3c;color:white;padding:8px 20px;border-radius:25px;text-decoration:none}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-bottom:25px}
+.stat-card{background:white;padding:20px;border-radius:15px;text-align:center;box-shadow:0 5px 15px rgba(0,0,0,0.1)}
+.stat-card .number{font-size:32px;font-weight:bold;color:#667eea}
+.stat-card .label{color:#7f8c8d;margin-top:8px}
+.form-container{background:white;border-radius:15px;padding:25px;margin-bottom:25px;box-shadow:0 5px 15px rgba(0,0,0,0.1)}
+.form-title{color:#2c3e50;margin-bottom:20px;padding-bottom:10px;border-bottom:2px solid #667eea;font-size:18px}
+.form-row{display:flex;gap:15px;flex-wrap:wrap;margin-bottom:15px}
+.form-row input,.form-row select{flex:1;min-width:150px;padding:10px 12px;border:2px solid #e0e0e0;border-radius:10px;font-size:14px}
+.btn-primary{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;padding:10px 30px;border-radius:25px;cursor:pointer;font-size:14px}
+.btn-primary:hover{transform:translateY(-2px)}
+.btn-danger{background:#e74c3c;color:white;border:none;padding:5px 15px;border-radius:20px;cursor:pointer}
+.table-container{background:white;border-radius:15px;overflow-x:auto;box-shadow:0 5px 15px rgba(0,0,0,0.1)}
+table{width:100%;border-collapse:collapse}
+th{background:#f8f9fa;padding:14px;text-align:right;color:#2c3e50;border-bottom:2px solid #667eea}
+td{padding:12px 14px;border-bottom:1px solid #e0e0e0}
+.quota-row{background:#fff3cd}
+.priority-1{background:#f8d7da}
+.priority-2{background:#fff3cd}
+.priority-3{background:#d1ecf1}
+.expired{background:#f8d7da}
+.expiring-soon{background:#f8d7da}
+.warning{background:#fff3cd}
+@media(max-width:768px){.sidebar{width:70px}.sidebar .menu-text{display:none}.main-content{margin-right:70px}}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<div class="sidebar-header"><h2>🏥 <span>داروخانه</span></h2><p>مدیریت هوشمند</p></div>
+<ul class="sidebar-menu">
+<li><a href="/" class="{% if active_page=='dashboard' %}active{% endif %}"><span class="icon">📊</span> <span class="menu-text">داشبورد</span></a></li>
+<li><a href="/deficit" class="{% if active_page=='deficit' %}active{% endif %}"><span class="icon">📋</span> <span class="menu-text">دفتر کسری</span></a></li>
+<li><a href="/inventory" class="{% if active_page=='inventory' %}active{% endif %}"><span class="icon">📦</span> <span class="menu-text">انبارداری</span></a></li>
+<li><a href="/orders" class="{% if active_page=='orders' %}active{% endif %}"><span class="icon">🛒</span> <span class="menu-text">سفارشات</span></a></li>
+</ul>
+</div>
+<div class="main-content">
+<div class="top-header"><div class="page-title">{% block title %}{% endblock %}</div><a href="/logout" class="logout-btn">🚪 خروج</a></div>
+{% block content %}{% endblock %}
+</div>
+</body>
+</html>
+'''
+
+# ============== صفحات ==============
+DASHBOARD_HTML = '''
+{% extends "base" %}
+{% block title %}داشبورد مدیریت{% endblock %}
+{% block content %}
+<div class="stats-grid">
+<div class="stat-card"><div class="number" id="totalDrugs">0</div><div class="label">کل داروهای کسری</div></div>
+<div class="stat-card"><div class="number" id="quotaDrugs">0</div><div class="label">⭐ سهمیه‌ای</div></div>
+<div class="stat-card"><div class="number" id="normalDrugs">0</div><div class="label">📦 عادی</div></div>
+</div>
+<div style="display:flex;gap:25px;flex-wrap:wrap">
+<div style="flex:2;min-width:300px"><div class="table-container"><div id="drugsList"></div></div></div>
+<div style="flex:1;min-width:350px"><div class="form-container">
+<div class="form-title">🛒 دستیار خرید</div>
+<select id="companySelect" style="width:100%;padding:10px;margin-bottom:20px;border:2px solid #e0e0e0;border-radius:10px">
+<option value="">-- انتخاب شرکت --</option>
+<option value="داروپخش">داروپخش</option><option value="البرز">البرز</option><option value="اکسیر">اکسیر</option><option value="رازی">رازی</option>
+</select>
+<div id="orderDrugs"></div>
+<button class="btn-primary" onclick="submitOrder()" style="width:100%;margin-top:20px;">✓ ثبت سفارش</button>
+</div></div></div>
+<script>
+let allDrugs=[];
+function loadDrugs(){fetch('/api/get_drugs').then(r=>r.json()).then(d=>{allDrugs=d.drugs||[];updateStats();renderTable();renderOrder()})}
+function updateStats(){let q=allDrugs.filter(d=>d.type==='quota').length,n=allDrugs.filter(d=>d.type!=='quota').length;document.getElementById('totalDrugs').innerText=allDrugs.length;document.getElementById('quotaDrugs').innerText=q;document.getElementById('normalDrugs').innerText=n}
+function renderTable(){if(allDrugs.length===0){document.getElementById('drugsList').innerHTML='<div style="text-align:center;padding:50px">📭 لیست کسری خالی است</div>';return}let h='<table><thead><tr><th>نام دارو</th><th>تعداد</th><th>نوع</th><th>اولویت</th></tr></thead><tbody>';allDrugs.forEach(d=>{h+='<tr class="'+(d.type==='quota'?'quota-row':'priority-'+d.priority)+'"><td>'+d.name+'竞争<td>'+d.quantity+'竞争<td>'+(d.type==='quota'?'⭐ سهمیه‌ای':'عادی')+'竞争<td>'+d.priority+'竞争</tr>'});h+='</tbody>赶';document.getElementById('drugsList').innerHTML=h}
+function renderOrder(){if(allDrugs.length===0){document.getElementById('orderDrugs').innerHTML='<div style="text-align:center;padding:40px">✨ لیست کسری خالی است</div>';return}let h='';let q=allDrugs.filter(d=>d.type==='quota');let n=allDrugs.filter(d=>d.type!=='quota');n.sort((a,b)=>a.priority-b.priority);if(q.length){h+='<div style="margin-bottom:15px"><strong>⭐ داروهای سهمیه‌ای</strong></div>';q.forEach(d=>{h+='<div style="background:#fff3cd;padding:10px;margin-bottom:8px;border-radius:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input type="checkbox" class="drug-check" data-id="'+d.id+'" style="width:20px;height:20px"><span style="flex:1"><strong>'+d.name+'</strong> - '+d.quantity+' عدد</span><input type="number" class="qty-'+d.id+'" value="'+d.quantity+'" style="width:80px;padding:5px;border-radius:5px;border:1px solid #ddd"></div>'})}if(n.length){h+='<div style="margin:15px 0 10px"><strong>📦 داروهای عادی</strong></div>';n.forEach(d=>{let c={1:'#f8d7da',2:'#fff3cd',3:'#d1ecf1',4:'white'}[d.priority];h+='<div style="background:'+c+';padding:10px;margin-bottom:8px;border-radius:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input type="checkbox" class="drug-check" data-id="'+d.id+'" style="width:20px;height:20px"><span style="flex:1"><strong>'+d.name+'</strong> - '+d.quantity+' عدد</span><input type="number" class="qty-'+d.id+'" value="'+d.quantity+'" style="width:80px;padding:5px;border-radius:5px;border:1px solid #ddd"></div>'})}document.getElementById('orderDrugs').innerHTML=h}
+function submitOrder(){let s=[],q={};document.querySelectorAll('.drug-check:checked').forEach(c=>{let id=parseInt(c.dataset.id);s.push(id);let inp=document.querySelector('.qty-'+id);if(inp)q[id]=inp.value});let c=document.getElementById('companySelect').value;if(!c){alert('❌ لطفاً شرکت را انتخاب کنید');return}if(s.length===0){alert('❌ حداقل یک دارو را انتخاب کنید');return}if(confirm('آیا از ثبت سفارش برای شرکت '+c+' مطمئن هستید؟')){fetch('/api/place_order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_ids:s,company:c,quantities:q})}).then(()=>location.reload())}}
+loadDrugs()
+</script>
+{% endblock %}
+'''
+
+DEFICIT_HTML = '''
+{% extends "base" %}
+{% block title %}دفتر کسری{% endblock %}
+{% block content %}
+<div class="form-container"><div class="form-title">➕ افزودن داروی جدید به کسری</div>
+<div class="form-row"><input type="text" id="drugName" placeholder="نام دارو"><input type="number" id="drugQuantity" placeholder="تعداد"><select id="drugType"><option value="normal">عادی</option><option value="quota">سهمیه‌ای ⭐</option></select><select id="drugPriority"><option value="1">اولویت ۱ (فوری) 🔴</option><option value="2">اولویت ۲ (بالا) 🟠</option><option value="3">اولویت ۳ (متوسط) 🟡</option><option value="4">اولویت ۴ (معمولی) ⚪</option></select><button class="btn-primary" onclick="addDrug()">➕ افزودن</button></div></div>
+<div class="table-container"><div id="drugsList"></div></div>
+<script>
+function loadDrugs(){fetch('/api/get_all_drugs').then(r=>r.json()).then(d=>{let drugs=d.drugs||[];if(drugs.length===0){document.getElementById('drugsList').innerHTML='<div style="text-align:center;padding:50px">📭 لیست کسری خالی است</div>';return}let h='<table><thead><tr><th>نام دارو</th><th>تعداد</th><th>نوع</th><th>اولویت</th><th>عملیات</th></tr></thead><tbody>';drugs.forEach(d=>{h+='<tr class="'+(d.type==='quota'?'quota-row':'priority-'+d.priority)+'"><td>'+d.name+'竞争<td>'+d.quantity+'竞争<td>'+(d.type==='quota'?'⭐ سهمیه‌ای':'عادی')+'竞争<td>'+d.priority+'竞争<td><button class="btn-danger" onclick="deleteDrug('+d.id+')">🗑 حذف</button></td></tr>'});h+='</tbody>赶';document.getElementById('drugsList').innerHTML=h})}
+function addDrug(){let fd=new FormData();fd.append('name',document.getElementById('drugName').value);fd.append('quantity',document.getElementById('drugQuantity').value);fd.append('type',document.getElementById('drugType').value);fd.append('priority',document.getElementById('drugPriority').value);fetch('/api/add_drug',{method:'POST',body:fd}).then(()=>location.reload())}
+function deleteDrug(id){if(confirm('آیا از حذف این دارو مطمئن هستید؟'))fetch('/api/delete_drug/'+id,{method:'POST'}).then(()=>loadDrugs())}
+loadDrugs()
+</script>
+{% endblock %}
+'''
+
+INVENTORY_HTML = '''
+{% extends "base" %}
+{% block title %}انبارداری{% endblock %}
+{% block content %}
+<div class="stats-grid">
+<div class="stat-card"><div class="number" id="totalItems">0</div><div class="label">کل اقلام</div></div>
+<div class="stat-card"><div class="number" id="warehouseCount">0</div><div class="label">📦 در انبار</div></div>
+<div class="stat-card"><div class="number" id="pharmacyCount">0</div><div class="label">🏪 در داروخانه</div></div>
+<div class="stat-card"><div class="number" id="expiringCount">0</div><div class="label">⚠️ در حال انقضا</div></div>
+</div>
+<div class="form-container"><div class="form-title">➕ افزودن دارو به انبار</div>
+<div class="form-row"><input type="text" id="invName" placeholder="نام دارو"><input type="number" id="invQuantity" placeholder="تعداد"><input type="text" id="invExpiry" placeholder="تاریخ انقضا (2026.5)"><select id="invLocation"><option value="warehouse">📦 انبار</option><option value="pharmacy">🏪 داروخانه</option></select><button class="btn-primary" onclick="addInventory()">➕ افزودن</button></div></div>
+<div class="table-container"><div id="inventoryList"></div></div>
+<script>
+function loadInventory(){fetch('/api/get_inventory').then(r=>r.json()).then(d=>{let items=d.inventory||[];document.getElementById('totalItems').innerText=items.length;document.getElementById('warehouseCount').innerText=items.filter(i=>i.location==='warehouse').length;document.getElementById('pharmacyCount').innerText=items.filter(i=>i.location==='pharmacy').length;let exp=items.filter(i=>{if(!i.expiry_date)return false;let p=i.expiry_date.split('.');if(p.length!==2)return false;let expDate=new Date(parseInt(p[0]),parseInt(p[1])-1,1);let m=(expDate.getFullYear()-new Date().getFullYear())*12+(expDate.getMonth()-new Date().getMonth());return m>0&&m<=6}).length;document.getElementById('expiringCount').innerText=exp;if(items.length===0){document.getElementById('inventoryList').innerHTML='<div style="text-align:center;padding:50px">📭 انبار خالی است</div>';return}let h='<td><thead><tr><th>نام دارو</th><th>تعداد</th><th>تاریخ انقضا</th><th>وضعیت</th><th>محل نگهداری</th><th>عملیات</th></tr></thead><tbody>';items.forEach(i=>{let s='',c='',ic='';if(i.expiry_date){let p=i.expiry_date.split('.');if(p.length===2){let expDate=new Date(parseInt(p[0]),parseInt(p[1])-1,1);let m=(expDate.getFullYear()-new Date().getFullYear())*12+(expDate.getMonth()-new Date().getMonth());if(m<0){ic='❌';s='منقضی شده';c='expired'}else if(m<=3){ic='🔴';s=m+' ماه مانده';c='expiring-soon'}else if(m<=6){ic='🟡';s=m+' ماه مانده';c='warning'}else{ic='✅';s=m+' ماه مانده'}}}let loc=i.location==='warehouse'?'📦 انبار':'🏪 داروخانه';h+='<tr class="'+c+'"><td>'+i.name+'竞争<td>'+i.quantity+' عدد竞争<td>'+(i.expiry_date||'-')+'竞争<td>'+ic+' '+s+'竞争<td>'+loc+'竞争<td><button class="btn-danger" onclick="deleteInventory('+i.id+')">🗑 حذف</button></td></tr>'});h+='</tbody>赶';document.getElementById('inventoryList').innerHTML=h})}
+function addInventory(){let fd=new FormData();fd.append('name',document.getElementById('invName').value);fd.append('quantity',document.getElementById('invQuantity').value);fd.append('expiry_date',document.getElementById('invExpiry').value);fd.append('location',document.getElementById('invLocation').value);fd.append('batch_number','');fd.append('manufacturer','');fetch('/api/add_inventory',{method:'POST',body:fd}).then(()=>location.reload())}
+function deleteInventory(id){if(confirm('آیا از حذف این قلم مطمئن هستید؟'))fetch('/api/delete_inventory/'+id,{method:'POST'}).then(()=>loadInventory())}
+loadInventory()
+</script>
+{% endblock %}
+'''
+
+ORDERS_HTML = '''
+{% extends "base" %}
+{% block title %}سفارشات{% endblock %}
+{% block content %}
+<div class="stats-grid">
+<div class="stat-card"><div class="number" id="totalOrders">0</div><div class="label">کل سفارشات</div></div>
+<div class="stat-card"><div class="number" id="totalItems">0</div><div class="label">تعداد اقلام</div></div>
+</div>
+<div class="table-container"><div id="ordersList"></div></div>
+<script>
+function loadOrders(){fetch('/api/get_orders').then(r=>r.json()).then(d=>{let orders=d.orders||[];document.getElementById('totalOrders').innerText=orders.length;let total=0;orders.forEach(o=>total+=parseInt(o.quantity)||0);document.getElementById('totalItems').innerText=total;if(orders.length===0){document.getElementById('ordersList').innerHTML='<div style="text-align:center;padding:50px">📭 هیچ سفارشی ثبت نشده است</div>';return}let h='<tr><thead><tr><th>شرکت</th><th>نام دارو</th><th>تعداد</th><th>تاریخ سفارش</th></tr></thead><tbody>';orders.forEach(o=>{let d=new Date(o.ordered_at);h+='<tr><td>'+o.company+'竞争<td>'+o.drug_name+'竞争<td style="color:#27ae60">'+o.quantity+' عدد竞争<td>'+d.toLocaleDateString('fa-IR')+' '+d.toLocaleTimeString('fa-IR')+'竞争</tr>'});h+='</tbody>赶';document.getElementById('ordersList').innerHTML=h})}
+loadOrders();setInterval(loadOrders,5000)
+</script>
+{% endblock %}
+'''
+
+# ============== روت‌ها ==============
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST' and request.form.get('password') == 'admin123':
+        session['logged_in'] = True
+        return redirect(url_for('dashboard'))
+    return '<meta charset="UTF-8"><form method="post" style="text-align:center;margin-top:100px;font-family:Tahoma"><h2>🏥 ورود به داروخانه</h2><input type="password" name="password" placeholder="رمز"><br><br><input type="submit" value="ورود"></form>'
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
+@app.route('/')
+@login_required
+def dashboard():
+    return render_template_string(BASE_HTML.replace('{% block title %}{% endblock %}', '{% block title %}داشبورد{% endblock %}').replace('{% block content %}{% endblock %}', DASHBOARD_HTML), active_page='dashboard')
+
+@app.route('/deficit')
+@login_required
+def deficit():
+    return render_template_string(BASE_HTML.replace('{% block title %}{% endblock %}', '{% block title %}دفتر کسری{% endblock %}').replace('{% block content %}{% endblock %}', DEFICIT_HTML), active_page='deficit')
+
+@app.route('/inventory')
+@login_required
+def inventory():
+    return render_template_string(BASE_HTML.replace('{% block title %}{% endblock %}', '{% block title %}انبارداری{% endblock %}').replace('{% block content %}{% endblock %}', INVENTORY_HTML), active_page='inventory')
+
+@app.route('/orders')
+@login_required
+def orders():
+    return render_template_string(BASE_HTML.replace('{% block title %}{% endblock %}', '{% block title %}سفارشات{% endblock %}').replace('{% block content %}{% endblock %}', ORDERS_HTML), active_page='orders')
+
+# ============== API ==============
+@app.route('/api/get_drugs')
+@login_required
+def get_drugs():
+    data = load_data()
+    return jsonify({'drugs': [d for d in data.get('drugs', []) if not d.get('ordered', False)]})
+
+@app.route('/api/get_all_drugs')
+@login_required
+def get_all_drugs():
+    return jsonify({'drugs': load_data().get('drugs', [])})
+
+@app.route('/api/add_drug', methods=['POST'])
+@login_required
+def add_drug():
+    data = load_data()
+    data['drugs'].append({
+        'id': data['next_id'],
+        'name': request.form['name'],
+        'quantity': int(request.form['quantity']),
+        'type': request.form['type'],
+        'priority': int(request.form.get('priority', 4)),
+        'created_at': datetime.now().isoformat(),
+        'ordered': False
+    })
+    data['next_id'] += 1
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/delete_drug/<int:drug_id>', methods=['POST'])
+@login_required
+def delete_drug(drug_id):
+    data = load_data()
+    data['drugs'] = [d for d in data['drugs'] if d['id'] != drug_id]
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/place_order', methods=['POST'])
+@login_required
+def place_order():
+    data = load_data()
+    req = request.get_json()
+    for drug in data['drugs']:
+        if drug['id'] in req.get('selected_ids', []):
+            data['orders'].append({
+                'company': req.get('company'),
+                'drug_name': drug['name'],
+                'quantity': int(req.get('quantities', {}).get(str(drug['id']), drug['quantity'])),
+                'ordered_at': datetime.now().isoformat()
+            })
+            if drug['type'] != 'quota':
+                drug['ordered'] = True
+    data['drugs'] = [d for d in data['drugs'] if d['type'] == 'quota' or not d.get('ordered', False)]
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/get_orders')
+@login_required
+def get_orders():
+    return jsonify({'orders': load_data().get('orders', [])})
+
+@app.route('/api/get_inventory')
+@login_required
+def get_inventory():
+    return jsonify({'inventory': load_data().get('inventory', [])})
+
+@app.route('/api/add_inventory', methods=['POST'])
+@login_required
+def add_inventory():
+    data = load_data()
+    data['inventory'].append({
+        'id': data.get('inventory_next_id', 1),
+        'name': request.form['name'],
+        'quantity': int(request.form['quantity']),
+        'batch_number': request.form.get('batch_number', ''),
+        'expiry_date': request.form['expiry_date'],
+        'manufacturer': request.form.get('manufacturer', ''),
+        'location': request.form.get('location', 'warehouse'),
+        'created_at': datetime.now().isoformat()
+    })
+    data['inventory_next_id'] = data.get('inventory_next_id', 1) + 1
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/delete_inventory/<int:item_id>', methods=['POST'])
+@login_required
+def delete_inventory(item_id):
+    data = load_data()
+    data['inventory'] = [i for i in data.get('inventory', []) if i['id'] != item_id]
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/companies')
+@login_required
+def get_companies():
+    return jsonify(load_data().get('companies', []))
+
+if __name__ == '__main__':
+    print("✅ داروخانه راه‌اندازی شد")
+    print("🌐 آدرس: http://0.0.0.0:5000")
+    print("🔑 رمز: admin123")
+    app.run(host='0.0.0.0', port=5000, debug=True)
+EOF
