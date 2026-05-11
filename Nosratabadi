@@ -412,7 +412,7 @@ def dashboard():
         fetch('/api/place_order', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{selected_ids:ids, company:company, quantities:qty}}) }}).then(()=>location.reload());
     }}
     loadDrugs();
-    setInterval(loadDrugs, 5000);
+    
     </script>
     '''
     return HTML.replace('<div id="dynamicContent"></div>', f'<div class="header"><div class="page-title">📊 داشبورد</div><div class="user-info"><span id="userInfo"></span><a href="/logout" class="logout-btn">🚪 خروج</a></div></div><div id="dynamicContent">{content}</div>')
