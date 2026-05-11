@@ -391,9 +391,9 @@ def dashboard():
             let html = '';
             drugs.forEach(drug=>{{
                 html += '<div style="padding:8px;margin:5px 0;background:#f8f8f8;border-radius:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
-                html += '<input type="checkbox" class="chk" data-id="'+drug.id+'">';
+                html += '<input type="checkbox" class="chk" data-id="'+drug.id+'" onclick="event.stopPropagation()">';
                 html += '<span style="flex:1"><strong>'+drug.name+'</strong> - '+drug.quantity+' عدد</span>';
-                html += '<input type="number" class="qty-'+drug.id+'" value="'+drug.quantity+'" style="width:70px;padding:4px">';
+                html += '<input type="number" class="qty-'+drug.id+'" value="'+drug.quantity+'" style="width:70px;padding:4px" onchange="event.stopPropagation()" onclick="event.stopPropagation()">';
                 html += '</div>';
             }});
             document.getElementById('drugsList').innerHTML = html || '<p style="text-align:center;padding:30px;color:#999">لیست کسری خالی است</p>';
