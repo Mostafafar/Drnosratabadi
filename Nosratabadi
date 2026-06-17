@@ -1,34 +1,26 @@
-cat > /var/www/poldaroo/pharmacy_final.py << 'EOF'
+cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 # -*- coding: utf-8 -*-
 import sqlite3
 import hashlib
 import json
-import os
-import re
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, session, redirect, url_for, g, send_file
+from datetime import datetime
+from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory
 from functools import wraps
-from werkzeug.utils import secure_filename
+import os
+import base64
+import re
+import uuid
 
 app = Flask(__name__)
 app.secret_key = 'pharmacy-secret-key-2024'
 app.config['JSON_AS_ASCII'] = False
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-UPLOAD_FOLDER = '/var/www/poldaroo/uploads/chat'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp3', 'webm', 'ogg'}
+# ایجاد پوشه برای آپلود فایل‌ها
+UPLOAD_FOLDER = '/var/www/poldaroo/uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-@app.after_request
-def after_request(response):
-    response.headers['Content-Type'] = 'text/html; charset=utf-8'
-    return response
-
-DATABASE = '/var/www/poldaroo/pharmacy.db'
+DATABASE = 'pharmacy.db'
 
 def get_db():
     db = getattr(g, '_database', None)
@@ -53,32 +45,13 @@ def get_current_user_from_session():
     cursor = db.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],))
     return cursor.fetchone()
 
-def is_admin():
-    return session.get('is_admin', False)
-
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get('logged_in'):
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated
-
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get('is_admin'):
-            return redirect(url_for('admin_login'))
-        return f(*args, **kwargs)
-    return decorated
-
 def validate_expiry_date(date_str):
     if not date_str or date_str.strip() == '':
-        return False
+        return True
     pattern = r'^\d{4}\.[1-9]$|^\d{4}\.1[0-2]$'
     return re.match(pattern, date_str) is not None
 
-def parse_expiry_date(expiry_str):
+def parse_expiry_number(expiry_str):
     if not expiry_str or expiry_str == '':
         return 999999
     try:
@@ -91,13 +64,6 @@ def parse_expiry_date(expiry_str):
         return 999999
     return 999999
 
-def get_persian_date():
-    try:
-        import jdatetime
-        return jdatetime.datetime.now().strftime('%A %d %B')
-    except:
-        return datetime.now().strftime('%A %d %B')
-
 def get_expiry_status(expiry_date):
     if not expiry_date:
         return {'text': 'نامشخص', 'class': ''}
@@ -108,26 +74,19 @@ def get_expiry_status(expiry_date):
             month = int(parts[1])
         else:
             return {'text': 'نامعتبر', 'class': ''}
+        
         now = datetime.now()
         exp = datetime(year, month, 1)
         months_left = (exp.year - now.year) * 12 + (exp.month - now.month)
+        
         if months_left < 0:
-            return {'text': 'منقضی', 'class': 'expired'}
+            return {'text': '🔴 منقضی', 'class': 'expired'}
         elif months_left <= 3:
-            return {'text': f'{months_left} ماه مانده', 'class': 'expiring-soon'}
+            return {'text': f'🟡 {months_left} ماه مانده', 'class': 'expiring-soon'}
         else:
-            return {'text': f'{months_left} ماه مانده', 'class': 'good-expiry'}
+            return {'text': f'🟢 {months_left} ماه مانده', 'class': 'good-expiry'}
     except:
         return {'text': 'نامعتبر', 'class': ''}
-
-def is_new_item(created_at):
-    if not created_at:
-        return False
-    try:
-        created = datetime.fromisoformat(created_at)
-        return (datetime.now() - created) < timedelta(days=3)
-    except:
-        return False
 
 def init_db():
     db = get_db()
@@ -136,11 +95,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        address TEXT NOT NULL,
         is_full_user INTEGER DEFAULT 0,
-        is_approved INTEGER DEFAULT 0,
-        approved_at TEXT,
         pharmacy_display_name TEXT NOT NULL,
         created_at TEXT NOT NULL
     )''')
@@ -221,7 +176,6 @@ def init_db():
         sender_categories TEXT DEFAULT '',
         my_items_json TEXT DEFAULT '',
         target_items_json TEXT DEFAULT '',
-        image_url TEXT DEFAULT '',
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
@@ -232,49 +186,62 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
-    db.execute('''CREATE TABLE IF NOT EXISTS chats (
+    db.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sender_id INTEGER NOT NULL,
-        receiver_id INTEGER NOT NULL,
-        message TEXT,
+        from_user_id INTEGER NOT NULL,
+        to_user_id INTEGER NOT NULL,
         message_type TEXT DEFAULT 'text',
+        content TEXT,
         file_url TEXT,
         created_at TEXT NOT NULL,
         is_read INTEGER DEFAULT 0,
-        FOREIGN KEY (sender_id) REFERENCES users(id),
-        FOREIGN KEY (receiver_id) REFERENCES users(id)
+        FOREIGN KEY (from_user_id) REFERENCES users(id),
+        FOREIGN KEY (to_user_id) REFERENCES users(id)
     )''')
     
-    db.execute('''CREATE TABLE IF NOT EXISTS admin_notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL,
-        related_id INTEGER NOT NULL,
-        message TEXT NOT NULL,
-        is_read INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL
-    )''')
+    try:
+        db.execute("ALTER TABLE inventory ADD COLUMN category TEXT DEFAULT 'other'")
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        db.execute("ALTER TABLE exchanges ADD COLUMN sender_categories TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        db.execute("ALTER TABLE exchanges ADD COLUMN my_items_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        db.execute("ALTER TABLE exchanges ADD COLUMN target_items_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     
     companies = ['داروپخش', 'البرز', 'اکسیر', 'رازی']
     for c in companies:
         db.execute("INSERT OR IGNORE INTO companies (name) VALUES (?)", (c,))
     
-    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'admin_system'")
+    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'nosratabadi'")
     if cursor.fetchone()['count'] == 0:
-        db.execute("INSERT INTO users (username, password_hash, phone, address, is_full_user, is_approved, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ('admin_system', hash_password('PharmacyAdmin@2026'), '0000000000', 'System Admin', 1, 1, 'مدیر سیستم', datetime.now().isoformat()))
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   ('nosratabadi', hash_password('admin123'), 1, 'داروخانه نصرت‌آبادی', datetime.now().isoformat()))
     
-    sample_pharmacies = [
-        ('nosratabadi', hash_password('admin123'), '09123456789', 'تهران - خیابان انقلاب', 'داروخانه نصرت‌آبادی'),
-        ('soleymani', hash_password('soleymani123'), '09123456780', 'تهران - خیابان ولیعصر', 'داروخانه سلیمانی'),
-        ('A101', hash_password('drsaboori'), '09123456781', 'اصفهان - چهارباغ', 'داروخانه A101'),
-        ('A102', hash_password('drjafari'), '09123456782', 'شیراز - خیابان زند', 'داروخانه A102'),
-    ]
+    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'soleymani'")
+    if cursor.fetchone()['count'] == 0:
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   ('soleymani', hash_password('soleymani123'), 1, 'داروخانه سلیمانی', datetime.now().isoformat()))
     
-    for username, pwd_hash, phone, addr, display_name in sample_pharmacies:
-        cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = ?", (username,))
-        if cursor.fetchone()['count'] == 0:
-            db.execute("INSERT INTO users (username, password_hash, phone, address, is_full_user, is_approved, approved_at, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, pwd_hash, phone, addr, 1, 1, datetime.now().isoformat(), display_name, datetime.now().isoformat()))
+    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'A101'")
+    if cursor.fetchone()['count'] == 0:
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   ('A101', hash_password('drsaboori'), 1, 'داروخانه A101', datetime.now().isoformat()))
+    
+    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'A102'")
+    if cursor.fetchone()['count'] == 0:
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   ('A102', hash_password('drjafari'), 1, 'داروخانه A102', datetime.now().isoformat()))
     
     for username in ['nosratabadi', 'soleymani', 'A101', 'A102']:
         cursor = db.execute("SELECT id FROM users WHERE username = ?", (username,))
@@ -284,35 +251,50 @@ def init_db():
             cursor = db.execute("SELECT COUNT(*) as count FROM inventory WHERE user_id = ?", (user_id,))
             if cursor.fetchone()['count'] == 0:
                 sample_data = [
-                    ('آسپرین', 100, '2025.03', 'warehouse'),
-                    ('آسپرین', 50, '2024.12', 'pharmacy'),
-                    ('ایبوپروفن', 75, '2024.09', 'pharmacy'),
-                    ('ایبوپروفن', 30, '2026.01', 'warehouse'),
-                    ('آمپی سیلین', 40, '2024.06', 'warehouse'),
-                    ('آمپی سیلین', 20, '2025.08', 'pharmacy'),
-                    ('دیازپام', 15, '2023.12', 'warehouse'),
+                    ('آسپرین', 100, '2026.3', 'warehouse', '2026-01-01 10:00:00'),
+                    ('آسپرین', 50, '2025.12', 'pharmacy', '2026-01-02 10:00:00'),
+                    ('ایبوپروفن', 75, '2025.9', 'pharmacy', '2026-01-03 10:00:00'),
+                    ('ایبوپروفن', 30, '2026.1', 'warehouse', '2026-01-04 10:00:00'),
+                    ('آمپی سیلین', 40, '2025.6', 'warehouse', '2026-01-05 10:00:00'),
+                    ('آمپی سیلین', 20, '2025.8', 'pharmacy', '2026-01-06 10:00:00'),
+                    ('دیازپام', 60, '2026.2', 'pharmacy', '2026-01-07 10:00:00'),
+                    ('دیازپام', 25, '2026.4', 'warehouse', '2026-01-08 10:00:00'),
+                    ('لوزارتان', 45, '2026.5', 'pharmacy', '2026-01-09 10:00:00'),
+                    ('مترونیدازول', 80, '2025.11', 'warehouse', '2026-01-10 10:00:00'),
+                    ('سفالکسین', 35, '2025.10', 'pharmacy', '2026-01-11 10:00:00'),
+                    ('آموکسی سیلین', 120, '2026.8', 'warehouse', '2026-01-12 10:00:00'),
                 ]
-                for name, qty, expiry, loc in sample_data:
-                    db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at) 
-                                VALUES (?, ?, ?, ?, ?, ?)''', (user_id, name, qty, expiry, loc, datetime.now().isoformat()))
+                for name, qty, expiry, loc, created in sample_data:
+                    db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
+                                  VALUES (?, ?, ?, ?, ?, ?)''',
+                               (user_id, name, qty, expiry, loc, created))
             
             cursor = db.execute("SELECT COUNT(*) as count FROM user_categories WHERE user_id = ?", (user_id,))
             if cursor.fetchone()['count'] == 0:
-                db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, ''))
+                db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, 'heart,respiratory,women'))
     
     db.commit()
 
 with app.app_context():
     init_db()
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
 HTML = '''<!DOCTYPE html>
 <html dir="rtl" lang="fa">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>سیستم مدیریت داروخانه</title>
+    <title>داروخانه</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: "Tahoma", "Segoe UI", sans-serif; background: #f5f5f5; color: #1a1a1a; }
+        body { font-family: 'Tahoma', 'Segoe UI', sans-serif; background: #f5f5f5; color: #1a1a1a; }
         .sidebar { position: fixed; right: 0; top: 0; width: 260px; height: 100%; background: #1a1a1a; color: white; z-index: 1000; overflow-y: auto; }
         .sidebar-header { padding: 20px 15px; text-align: center; border-bottom: 1px solid #333; }
         .sidebar-header h2 { color: white; font-size: 20px; }
@@ -329,132 +311,298 @@ HTML = '''<!DOCTYPE html>
         .logout-btn { background: #dc3545; color: white; padding: 6px 16px; border-radius: 8px; text-decoration: none; font-size: 13px; }
         .card { background: white; border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e0e0e0; }
-        .drugs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-        .drug-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transition: transform 0.2s; }
-        .drug-card:hover { transform: translateY(-2px); }
-        .drug-card-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px; display: flex; justify-content: space-between; align-items: center; }
-        .drug-card-header .code { font-size: 12px; opacity: 0.9; font-family: monospace; }
-        .drug-card-header .new-badge { background: #28a745; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: bold; }
-        .drug-card-body { padding: 12px; }
-        .drug-name { font-size: 16px; font-weight: bold; margin-bottom: 8px; }
-        .drug-expiry { font-size: 12px; color: #666; margin-bottom: 8px; }
-        .drug-pharmacy { font-size: 12px; color: #888; margin-bottom: 12px; }
-        .drug-card-footer { padding: 12px; border-top: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-        .add-btn { background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-        .add-btn:hover { background: #218838; }
-        .filters-bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }
-        .search-box { flex: 2; min-width: 200px; }
-        .search-box input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
-        .filter-select { padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: white; }
-        .city-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
-        .city-tab { padding: 6px 16px; background: #e0e0e0; border-radius: 20px; cursor: pointer; font-size: 13px; }
-        .city-tab.active { background: #1a1a1a; color: white; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .stat-card .number { font-size: 28px; font-weight: bold; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 12px; border-radius: 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stat-card .number { font-size: 24px; font-weight: bold; }
+        .stat-card .label { color: #666; font-size: 12px; margin-top: 5px; }
         .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-        .form-row input, .form-row select { flex: 1; min-width: 120px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; }
-        button { background: #1a1a1a; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; }
+        .form-row input, .form-row select { flex: 1; min-width: 130px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }
+        button { background: #1a1a1a; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; }
         .btn-danger { background: #dc3545; }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
         .btn-success { background: #28a745; }
         .btn-warning { background: #ffc107; color: #1a1a1a; }
-        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        .search-container { position: relative; flex: 1; }
+        .suggestions-list { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-radius: 8px; max-height: 250px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .suggestions-list div { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .suggestions-list div:hover { background: #f0f0f0; }
+        .suggestions-list .stock-info { font-size: 11px; color: #666; margin-top: 4px; }
+        .inventory-wrapper { overflow-x: visible; }
+        .inventory-table { min-width: 100%; }
+        
+        .expiry-group { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+        .expiry-group-header { padding: 10px 12px; font-weight: bold; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; cursor: pointer; background: #f8f9fa; }
+        .expiry-group-header .expiry-status { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+        .expiry-group-items { padding: 5px 0; }
+        .expiry-group-items .inventory-row { display: grid; grid-template-columns: 30px 2fr 1fr 0.8fr 1fr 0.8fr; gap: 10px; padding: 8px 12px; align-items: center; border-bottom: 1px solid #eee; }
+        .expiry-group-items .inventory-row:hover { background: #fafafa; }
+        
+        .pharmacy-accordion { border: 1px solid #e0e0e0; border-radius: 12px; margin-bottom: 15px; overflow: hidden; }
+        .pharmacy-header { background: #1a1a1a; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .pharmacy-header:hover { opacity: 0.9; }
+        .pharmacy-header .pharmacy-name { font-weight: bold; }
+        .pharmacy-header .drug-count { font-size: 12px; background: #333; padding: 2px 8px; border-radius: 20px; }
+        .pharmacy-header .chat-btn { background: #17a2b8; padding: 4px 12px; border-radius: 20px; font-size: 11px; margin-right: 10px; }
+        .pharmacy-header .chat-btn:hover { background: #138496; }
+        .pharmacy-content { display: none; padding: 15px; background: white; }
+        .pharmacy-content.show { display: block; }
+        
+        .exchange-dual-container { display: flex; gap: 20px; flex-wrap: wrap; }
+        .exchange-list-box { flex: 1; min-width: 320px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .exchange-list-header { background: #1a1a1a; color: white; padding: 12px; text-align: center; font-weight: bold; }
+        .exchange-list-items { max-height: 500px; overflow-y: auto; padding: 10px; }
+        
+        .exchange-drug-item { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .exchange-drug-item:hover { background: #f5f5f5; }
+        .exchange-drug-item.selected { background: #d4edda; }
+        .exchange-drug-check { width: 20px; height: 20px; cursor: pointer; }
+        .exchange-drug-info { flex: 1; }
+        .exchange-drug-name { font-weight: bold; font-size: 13px; }
+        .exchange-drug-detail { font-size: 11px; color: #666; }
+        .exchange-qty-input { width: 70px; padding: 4px; border: 1px solid #ddd; border-radius: 6px; text-align: center; }
+        
+        .exchange-summary { background: #f8f9fa; padding: 15px; border-radius: 12px; margin-top: 15px; }
+        .exchange-tab { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
+        .exchange-tab button { background: none; color: #1a1a1a; border: none; padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 0; }
+        .exchange-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .category-checkboxes { display: flex; flex-wrap: wrap; gap: 12px; margin: 15px 0; padding: 15px; background: #f8f9fa; border-radius: 12px; }
+        .category-checkboxes label { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 10px; background: white; border-radius: 20px; border: 1px solid #ddd; }
+        
+        .deficit-table { width: 100%; border-collapse: collapse; }
+        .deficit-table th, .deficit-table td { padding: 10px; text-align: center; border-bottom: 1px solid #eee; }
+        .deficit-table th { background: #f0f0f0; font-weight: bold; }
+        
+        .chat-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+        .chat-modal-content {
+            background: white;
+            width: 90%;
+            max-width: 500px;
+            height: 80%;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #1a1a1a;
+            color: white;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #f5f5f5;
+        }
+        .chat-message {
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-message.sent { align-items: flex-end; }
+        .chat-message.received { align-items: flex-start; }
+        .message-bubble {
+            max-width: 70%;
+            padding: 8px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+        }
+        .sent .message-bubble { background: #1a1a1a; color: white; }
+        .received .message-bubble { background: white; color: #1a1a1a; border: 1px solid #ddd; }
+        .message-time { font-size: 10px; color: #999; margin-top: 3px; }
+        .chat-input-area {
+            padding: 12px;
+            background: white;
+            border-top: 1px solid #ddd;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .chat-input-area input[type="text"] { flex: 3; padding: 8px; border: 1px solid #ddd; border-radius: 20px; }
+        .chat-input-area button { padding: 6px 12px; font-size: 12px; }
+        .chat-image { max-width: 200px; max-height: 150px; border-radius: 8px; margin-top: 5px; }
+        .chat-audio { margin-top: 5px; }
+        
         .expired { background: #f8d7da; }
         .expiring-soon { background: #fff3cd; }
         .good-expiry { background: #d4edda; }
-        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
-        .modal-content { background: white; border-radius: 16px; padding: 24px; max-width: 400px; width: 90%; }
-        .chat-container { display: flex; height: calc(100vh - 200px); gap: 20px; }
-        .conversations-list { width: 300px; background: white; border-radius: 12px; overflow-y: auto; }
-        .conversation-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; }
-        .conversation-item:hover { background: #f5f5f5; }
-        .conversation-item.active { background: #e3f2fd; }
-        .conversation-name { font-weight: bold; margin-bottom: 5px; }
-        .conversation-last-msg { font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .chat-area { flex: 1; background: white; border-radius: 12px; display: flex; flex-direction: column; }
-        .chat-header { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-        .chat-messages { flex: 1; overflow-y: auto; padding: 15px; }
-        .message { margin-bottom: 15px; display: flex; }
-        .message.sent { justify-content: flex-end; }
-        .message.received { justify-content: flex-start; }
-        .message-bubble { max-width: 70%; padding: 10px 15px; border-radius: 18px; }
-        .message.sent .message-bubble { background: #1a1a1a; color: white; }
-        .message.received .message-bubble { background: #f0f0f0; color: #1a1a1a; }
-        .message-img { max-width: 200px; max-height: 200px; border-radius: 12px; cursor: pointer; }
-        .message-audio { width: 200px; }
-        .chat-input-area { padding: 15px; border-top: 1px solid #eee; display: flex; gap: 10px; align-items: center; }
-        .chat-input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 20px; resize: none; font-family: inherit; }
-        .chat-btn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 8px; }
-        .expiry-group { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
-        .expiry-group-header { background: #f8f8f8; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
-        .expiry-group-header.expired { background: #f8d7da; color: #721c24; }
-        .expiry-group-content { padding: 0; display: none; }
-        .expiry-group-content.show { display: block; }
-        .inventory-header { display: grid; grid-template-columns: 30px 2fr 1fr 80px 100px 60px; gap: 10px; padding: 10px 12px; background: #f0f0f0; font-weight: bold; border-radius: 8px; }
-        .inventory-row { display: grid; grid-template-columns: 30px 2fr 1fr 80px 100px 60px; gap: 10px; padding: 10px 12px; align-items: center; border-bottom: 1px solid #eee; font-size: 13px; }
-        .suggestions-list { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-radius: 8px; max-height: 250px; overflow-y: auto; z-index: 1000; display: none; }
-        .suggestions-list div { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; }
-        .deficit-table { width: 100%; border-collapse: collapse; }
-        .deficit-table th, .deficit-table td { padding: 10px; text-align: center; border-bottom: 1px solid #eee; }
-        .deficit-table th { background: #f0f0f0; }
+        .location-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+        .location-warehouse { background: #cfe2ff; color: #084298; }
+        .location-pharmacy { background: #d1e7dd; color: #0a3622; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 12px; font-size: 10px; margin-right: 5px; }
         .status-pending { background: #ffc107; color: #1a1a1a; }
         .status-confirmed { background: #28a745; color: white; }
+        .export-btn { background: #17a2b8; margin-right: 10px; }
+        .hide-btn { background: #6c757d; padding: 2px 8px; font-size: 11px; margin-right: 5px; }
+        .error-text { color: #dc3545; font-size: 12px; margin-top: 5px; display: none; }
+        
         @media (max-width: 768px) {
             .sidebar { width: 65px; }
             .sidebar .menu-text { display: none; }
+            .sidebar-header .pharmacy-name { display: none; }
             .main-content { margin-right: 65px; padding: 12px; }
-            .drugs-grid { grid-template-columns: 1fr; }
+            .exchange-dual-container { flex-direction: column; }
+            .expiry-group-items .inventory-row { grid-template-columns: 25px 1.5fr 1fr 0.7fr 0.8fr 0.7fr; gap: 5px; font-size: 11px; }
         }
     </style>
 </head>
 <body>
-    <div class="sidebar" id="sidebar" style="display: none;">
+    <div class="sidebar">
         <div class="sidebar-header">
             <h2>📋 داروخانه</h2>
             <div class="pharmacy-name" id="pharmacyDisplayName"></div>
         </div>
         <ul class="sidebar-menu">
-            <li><a href="/"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
-            <li><a href="/dashboard"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
-            <li><a href="/chat"><span>💬</span> <span class="menu-text">چت</span></a></li>
+            <li><a href="/exchange"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
             <li><a href="/inventory"><span>📦</span> <span class="menu-text">انبارداری</span></a></li>
             <li><a href="/deficit"><span>📋</span> <span class="menu-text">دفتر کسری</span></a></li>
+            <li><a href="/dashboard"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
         </ul>
     </div>
     <div class="main-content">
         <div class="header">
             <div class="page-title" id="pageTitle"></div>
-            <div class="user-info" id="userInfo"></div>
+            <div class="user-info">
+                <span id="userInfo"></span>
+                <a href="/logout" class="logout-btn">🚪 خروج</a>
+            </div>
         </div>
         <div id="dynamicContent"></div>
     </div>
-    <div id="registerModal" class="modal">
-        <div class="modal-content">
-            <h3>⚠️ نیاز به ثبت‌نام</h3>
-            <p>برای استفاده از این قابلیت، ابتدا ثبت‌نام کنید.</p>
-            <button onclick="window.location.href='/register'">ثبت‌نام</button>
-            <button onclick="closeModal()">بستن</button>
+    <div id="chatModal" class="chat-modal">
+        <div class="chat-modal-content">
+            <div class="chat-header">
+                <span id="chatTargetName"></span>
+                <button onclick="closeChat()" style="background:none; border:none; color:white; font-size:20px;">✕</button>
+            </div>
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-area">
+                <input type="text" id="chatInput" placeholder="پیام خود را بنویسید..." onkeypress="if(event.key==='Enter') sendMessage()">
+                <input type="file" id="chatImageInput" accept="image/*" style="display:none" onchange="sendImage()">
+                <button onclick="document.getElementById('chatImageInput').click()">📷</button>
+                <input type="file" id="chatAudioInput" accept="audio/*" style="display:none" onchange="sendAudio()">
+                <button onclick="document.getElementById('chatAudioInput').click()">🎤</button>
+                <button onclick="sendMessage()">📤</button>
+            </div>
         </div>
     </div>
     <script>
-        let currentUserId = null;
+        let currentChatUserId = null;
+        let chatInterval = null;
+        
         function loadUserInfo() {
-            fetch("/api/get_current_user").then(r=>r.json()).then(data=>{
-                if(data.logged_in) {
-                    document.getElementById("sidebar").style.display = "block";
-                    document.getElementById("pharmacyDisplayName").innerText = data.pharmacy_display_name;
-                    document.getElementById("userInfo").innerHTML = "<span>👤 " + data.username + " | " + data.pharmacy_display_name + "</span><a href=\"/logout\" class=\"logout-btn\">🚪 خروج</a>";
-                    sessionStorage.setItem("userId", data.id);
-                    currentUserId = data.id;
-                } else {
-                    document.getElementById("sidebar").style.display = "none";
-                    document.getElementById("userInfo").innerHTML = "<a href=\"/login\" style=\"margin-left:10px\">ورود</a><a href=\"/register\">ثبت‌نام</a>";
-                }
-            }).catch(err=>console.error("Error loading user:", err));
+            fetch('/api/get_current_user').then(r=>r.json()).then(data=>{
+                document.getElementById('pharmacyDisplayName').innerText = data.pharmacy_display_name;
+                document.getElementById('userInfo').innerHTML = '👤 ' + data.username + ' | ' + data.pharmacy_display_name;
+                sessionStorage.setItem('userId', data.id);
+                sessionStorage.setItem('pharmacyId', data.id);
+            }).catch(err=>console.error('Error loading user:', err));
         }
-        function showRegisterModal() { document.getElementById("registerModal").style.display = "flex"; }
-        function closeModal() { document.getElementById("registerModal").style.display = "none"; }
         loadUserInfo();
+        
+        function openChat(pharmacyId, pharmacyName) {
+            currentChatUserId = pharmacyId;
+            document.getElementById('chatTargetName').innerText = pharmacyName;
+            document.getElementById('chatModal').style.display = 'flex';
+            loadChatMessages();
+            if(chatInterval) clearInterval(chatInterval);
+            chatInterval = setInterval(loadChatMessages, 5000);
+        }
+        
+        function closeChat() {
+            document.getElementById('chatModal').style.display = 'none';
+            if(chatInterval) { clearInterval(chatInterval); chatInterval = null; }
+            currentChatUserId = null;
+        }
+        
+        function loadChatMessages() {
+            if(!currentChatUserId) return;
+            fetch('/api/get_messages?other_user_id=' + currentChatUserId)
+                .then(r=>r.json())
+                .then(data=>{
+                    let container = document.getElementById('chatMessages');
+                    let currentUserId = parseInt(sessionStorage.getItem('userId'));
+                    let html = '';
+                    data.messages.forEach(msg=>{
+                        let isSent = msg.from_user_id === currentUserId;
+                        html += '<div class="chat-message ' + (isSent ? 'sent' : 'received') + '">';
+                        html += '<div class="message-bubble">';
+                        if(msg.message_type === 'text') html += msg.content;
+                        else if(msg.message_type === 'image') html += '<img src="' + msg.file_url + '" class="chat-image" onclick="window.open(this.src)">';
+                        else if(msg.message_type === 'audio') html += '<audio controls class="chat-audio"><source src="' + msg.file_url + '"></audio>';
+                        html += '</div>';
+                        html += '<div class="message-time">' + new Date(msg.created_at).toLocaleTimeString('fa-IR') + '</div>';
+                        html += '</div>';
+                    });
+                    container.innerHTML = html;
+                    container.scrollTop = container.scrollHeight;
+                });
+        }
+        
+        function sendMessage() {
+            let input = document.getElementById('chatInput');
+            let text = input.value.trim();
+            if(!text || !currentChatUserId) return;
+            fetch('/api/send_message', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({to_user_id: currentChatUserId, message_type: 'text', content: text})
+            }).then(()=>{
+                input.value = '';
+                loadChatMessages();
+            });
+        }
+        
+        function sendImage() {
+            let file = document.getElementById('chatImageInput').files[0];
+            if(!file || !currentChatUserId) return;
+            let reader = new FileReader();
+            reader.onload = function(e) {
+                fetch('/api/send_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({to_user_id: currentChatUserId, message_type: 'image', content: e.target.result})
+                }).then(()=>{
+                    document.getElementById('chatImageInput').value = '';
+                    loadChatMessages();
+                });
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function sendAudio() {
+            let file = document.getElementById('chatAudioInput').files[0];
+            if(!file || !currentChatUserId) return;
+            let reader = new FileReader();
+            reader.onload = function(e) {
+                fetch('/api/send_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({to_user_id: currentChatUserId, message_type: 'audio', content: e.target.result})
+                }).then(()=>{
+                    document.getElementById('chatAudioInput').value = '';
+                    loadChatMessages();
+                });
+            };
+            reader.readAsDataURL(file);
+        }
     </script>
 </body>
 </html>'''
@@ -467,440 +615,230 @@ def login():
         db = get_db()
         cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
         user = cursor.fetchone()
-        
         if user and user['password_hash'] == hash_password(password):
-            if user['is_approved'] == 0:
-                return '''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ورود</title><style>
-                    body{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;height:100vh}
-                    .box{background:white;padding:30px;border-radius:16px;text-align:center}
-                </style></head><body>
-                <div class="box"><h2>⏳ حساب کاربری شما هنوز تایید نشده است</h2><p>لطفا پس از تایید توسط ادمین وارد شوید.</p><a href="/login">بازگشت</a></div>
-                </body></html>'''
-            
             session.clear()
             session['logged_in'] = True
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['is_full_user'] = user['is_full_user']
             session['pharmacy_display_name'] = user['pharmacy_display_name']
-            return redirect(url_for('index'))
-        
-        return render_login_form('نام کاربری یا رمز عبور اشتباه است')
-    
-    return render_login_form()
-
-def render_login_form(error=None):
-    error_html = f'<div class="error">{error}</div>' if error else ''
-    return f'''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ورود</title><style>
-        body{{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;height:100vh}}
-        .login-box{{background:white;padding:30px;border-radius:16px;width:320px;text-align:center}}
-        input{{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:8px}}
-        button{{width:100%;padding:10px;background:#1a1a1a;color:white;border:none;border-radius:8px;cursor:pointer}}
-        .error{{color:#dc3545;margin-top:10px}}
-    </style></head><body>
-    <div class="login-box"><h2>🏥 ورود</h2>
-    <form method="post"><input type="text" name="username" placeholder="نام داروخانه" required>
-    <input type="password" name="password" placeholder="رمز عبور" required><button type="submit">ورود</button></form>
-    {error_html}
-    <a href="/register">ثبت‌نام</a></div></body></html>'''
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        pharmacy_name = request.form.get('pharmacy_name', '').strip()
-        password = request.form.get('password', '')
-        password_confirm = request.form.get('password_confirm', '')
-        phone = request.form.get('phone', '').strip()
-        address = request.form.get('address', '').strip()
-        
-        errors = []
-        if not pharmacy_name:
-            errors.append('نام داروخانه الزامی است')
-        if len(password) < 6:
-            errors.append('رمز عبور باید حداقل 6 کاراکتر باشد')
-        if password != password_confirm:
-            errors.append('رمز عبور و تکرار آن مطابقت ندارند')
-        if not phone:
-            errors.append('شماره تلفن الزامی است')
-        if not address:
-            errors.append('آدرس الزامی است')
-        
-        if errors:
-            error_html = '<div class="errors" style="color:#dc3545;margin-bottom:10px">' + '<br>'.join(errors) + '</div>'
-            return f'''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ثبت‌نام</title><style>
-                body{{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:20px}}
-                .register-box{{background:white;padding:30px;border-radius:16px;width:400px;max-width:90%}}
-                input,textarea{{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:8px}}
-                textarea{{resize:vertical}}
-                button{{width:100%;padding:10px;background:#1a1a1a;color:white;border:none;border-radius:8px;cursor:pointer}}
-            </style></head><body>
-            <div class="register-box"><h2>📝 ثبت‌نام داروخانه جدید</h2>
-            {error_html}
+            return redirect(url_for('exchange'))
+        return '''
+        <!DOCTYPE html>
+        <html dir="rtl" lang="fa">
+        <head><meta charset="UTF-8"><title>ورود</title>
+        <style>
+            body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+            .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+            .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+            .login-box button { width: 100%; padding: 10px; background: #1a1a1a; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+            .error { color: #dc3545; margin-top: 10px; font-size: 13px; }
+        </style>
+        </head>
+        <body>
+        <div class="login-box">
+            <h2>🏥 ورود</h2>
             <form method="post">
-                <input type="text" name="pharmacy_name" placeholder="نام داروخانه" required>
-                <input type="password" name="password" placeholder="رمز عبور (حداقل 6 کاراکتر)" required>
-                <input type="password" name="password_confirm" placeholder="تکرار رمز عبور" required>
-                <input type="tel" name="phone" placeholder="شماره تلفن" required>
-                <textarea name="address" rows="3" placeholder="آدرس کامل داروخانه" required></textarea>
-                <button type="submit">ثبت‌نام</button>
+                <input type="text" name="username" placeholder="نام کاربری" required>
+                <input type="password" name="password" placeholder="رمز عبور" required>
+                <button type="submit">ورود</button>
             </form>
-            <div style="text-align:center;margin-top:15px"><a href="/login">قبلاً ثبت‌نام کرده‌اید؟ ورود</a></div>
-            </div></body></html>'''
-        
-        db = get_db()
-        cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = ?", (pharmacy_name,))
-        if cursor.fetchone()['count'] > 0:
-            return '''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ثبت‌نام</title><style>
-                body{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;height:100vh}
-                .box{background:white;padding:30px;border-radius:16px;text-align:center}
-                .error{color:#dc3545}
-            </style></head><body>
-            <div class="box"><h2 class="error">❌ خطا</h2><p>این نام داروخانه قبلاً ثبت شده است</p><a href="/register">بازگشت</a></div></body></html>'''
-        
-        cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE phone = ?", (phone,))
-        if cursor.fetchone()['count'] > 0:
-            return '''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ثبت‌نام</title><style>
-                body{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;height:100vh}
-                .box{background:white;padding:30px;border-radius:16px;text-align:center}
-                .error{color:#dc3545}
-            </style></head><body>
-            <div class="box"><h2 class="error">❌ خطا</h2><p>این شماره تلفن قبلاً ثبت شده است</p><a href="/register">بازگشت</a></div></body></html>'''
-        
-        db.execute("INSERT INTO users (username, password_hash, phone, address, is_full_user, is_approved, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (pharmacy_name, hash_password(password), phone, address, 0, 0, pharmacy_name, datetime.now().isoformat()))
-        db.commit()
-        
-        db.execute("INSERT INTO admin_notifications (type, related_id, message, created_at) VALUES (?, ?, ?, ?)",
-            ('new_pharmacy', pharmacy_name, f'داروخانه جدید "{pharmacy_name}" ثبت‌نام کرد و منتظر تایید است', datetime.now().isoformat()))
-        db.commit()
-        
-        return '''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ثبت‌نام</title><style>
-            body{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;height:100vh}
-            .box{background:white;padding:30px;border-radius:16px;text-align:center}
-            .success{color:#28a745}
-        </style></head><body>
-        <div class="box"><h2 class="success">✅ درخواست شما ثبت شد</h2>
-        <p>درخواست شما برای ادمین ارسال شد. پس از تایید میتوانید وارد شوید.</p>
-        <a href="/login">بازگشت به صفحه ورود</a></div></body></html>'''
-    
-    return '''<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>ثبت‌نام</title><style>
-        body{font-family:Tahoma;background:#f5f5f5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:20px}
-        .register-box{background:white;padding:30px;border-radius:16px;width:400px;max-width:90%}
-        input,textarea{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:8px}
-        textarea{resize:vertical}
-        button{width:100%;padding:10px;background:#1a1a1a;color:white;border:none;border-radius:8px;cursor:pointer}
-    </style></head><body>
-    <div class="register-box"><h2>📝 ثبت‌نام داروخانه جدید</h2>
-    <form method="post">
-        <input type="text" name="pharmacy_name" placeholder="نام داروخانه" required>
-        <input type="password" name="password" placeholder="رمز عبور (حداقل 6 کاراکتر)" required>
-        <input type="password" name="password_confirm" placeholder="تکرار رمز عبور" required>
-        <input type="tel" name="phone" placeholder="شماره تلفن" required>
-        <textarea name="address" rows="3" placeholder="آدرس کامل داروخانه" required></textarea>
-        <button type="submit">ثبت‌نام</button>
-    </form>
-    <div style="text-align:center;margin-top:15px"><a href="/login">قبلاً ثبت‌نام کرده‌اید؟ ورود</a></div>
-    </div></body></html>'''
+            <div class="error">نام کاربری یا رمز عبور اشتباه است</div>
+        </div>
+        </body>
+        </html>
+        '''
+    return '''
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head><meta charset="UTF-8"><title>ورود</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+        .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+        .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        .login-box button { width: 100%; padding: 10px; background: #1a1a1a; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+    </style>
+    </head>
+    <body>
+    <div class="login-box">
+        <h2>🏥 ورود</h2>
+        <form method="post">
+            <input type="text" name="username" placeholder="نام کاربری" required>
+            <input type="password" name="password" placeholder="رمز عبور" required>
+            <button type="submit">ورود</button>
+        </form>
+    </div>
+    </body>
+    </html>
+    '''
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def index():
+    return redirect(url_for('exchange'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
     content = '''
-    <div class="top-bar">
-        <div class="date-display" style="margin-bottom:15px;font-size:14px;color:#666">📅 <span id="persianDate"></span> | آخرین بروزرسانی‌ها</div>
-        <div class="city-tabs" id="cityTabs"></div>
+    <div class="dashboard-tab">
+        <button class="active" onclick="showDashboardTab('assistant')">📋 دستیار خرید</button>
+        <button onclick="showDashboardTab('orders')">📜 سفارشات ثبت شده</button>
     </div>
-    <div class="filters-bar">
-        <div class="search-box"><input type="text" id="searchInput" placeholder="🔍 جستجو دارو، داروخانه..." onkeyup="filterDrugs()"></div>
-        <select id="sortSelect" class="filter-select" onchange="filterDrugs()">
-            <option value="expiry_asc">مرتبسازی: نزدیکترین انقضا</option>
-            <option value="expiry_desc">مرتبسازی: دورترین انقضا</option>
-            <option value="newest">مرتبسازی: جدیدترین</option>
-        </select>
-        <select id="cityFilter" class="filter-select" onchange="filterDrugs()"><option value="all">همه شهرها</option></select>
+    
+    <div id="assistantTab" class="tab-content active">
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card"><div class="number" id="totalDrugs">0</div><div class="label">کل داروهای کسری</div></div>
+            <div class="stat-card"><div class="number" id="quotaDrugs">0</div><div class="label">سهمیه ای</div></div>
+            <div class="stat-card"><div class="number" id="normalDrugs">0</div><div class="label">عادی</div></div>
+        </div>
+        <div class="card">
+            <div class="card-title">📋 دستیار خرید</div>
+            <div class="form-row">
+                <select id="company">
+                    <option value="داروپخش">داروپخش</option>
+                    <option value="البرز">البرز</option>
+                    <option value="اکسیر">اکسیر</option>
+                    <option value="رازی">رازی</option>
+                </select>
+                <button type="button" onclick="submitOrder()">📦 ثبت سفارش</button>
+            </div>
+            <div class="drugs-columns" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+                <div class="drugs-column">
+                    <h4>📦 سهمیه ای</h4>
+                    <div id="quotaDrugsList"></div>
+                </div>
+                <div class="drugs-column">
+                    <h4>📦 عادی</h4>
+                    <div id="normalDrugsList"></div>
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="drugs-grid" id="drugsGrid"><div style="text-align:center;padding:40px">در حال بارگذاری...</div></div>
+    
+    <div id="ordersTab" class="tab-content">
+        <div class="card">
+            <div class="card-title">🔍 فیلتر سفارشات</div>
+            <div class="form-row">
+                <select id="companyFilter">
+                    <option value="all">همه شرکت ها</option>
+                    <option value="داروپخش">داروپخش</option>
+                    <option value="البرز">البرز</option>
+                    <option value="اکسیر">اکسیر</option>
+                    <option value="رازی">رازی</option>
+                </select>
+                <input type="text" id="searchFilter" placeholder="جستجوی نام دارو...">
+                <button onclick="resetFilters()">حذف فیلتر</button>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">📋 لیست سفارشات</div>
+            <div id="ordersList" style="max-height:400px;overflow-y:auto"></div>
+        </div>
+    </div>
     
     <script>
-        let allDrugs = [];
-        
-        function getPersianDate() {
-            fetch("/api/persian_date").then(r=>r.json()).then(data=>{
-                document.getElementById("persianDate").innerText = data.date;
-            });
+    let allDrugs = [];
+    let allOrders = [];
+    
+    function showDashboardTab(tab) {
+        document.querySelectorAll('#assistantTab, #ordersTab').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.dashboard-tab button').forEach(btn => btn.classList.remove('active'));
+        if(tab === 'assistant') {
+            document.getElementById('assistantTab').classList.add('active');
+            document.querySelector('.dashboard-tab button:first-child').classList.add('active');
+            loadDrugs();
+        } else {
+            document.getElementById('ordersTab').classList.add('active');
+            document.querySelector('.dashboard-tab button:last-child').classList.add('active');
+            loadOrders();
         }
-        
-        function loadDrugs() {
-            fetch("/api/all_drugs_for_exchange").then(r=>r.json()).then(data=>{
-                allDrugs = data.drugs || [];
-                renderCities();
-                filterDrugs();
-            }).catch(err=>console.error("Error loading drugs:", err));
-        }
-        
-        function renderCities() {
-            let cities = [...new Set(allDrugs.map(d => d.city || "سایر"))];
-            let html = "<div class=\"city-tab active\" data-city=\"all\" onclick=\"selectCity('all')\">همه شهرها</div>";
-            cities.forEach(city => {
-                html += "<div class=\"city-tab\" data-city=\"" + city + "\" onclick=\"selectCity('" + city + "')\">" + city + "</div>";
-            });
-            document.getElementById("cityTabs").innerHTML = html;
+    }
+    
+    function loadDrugs() {
+        fetch('/api/get_drugs').then(r=>r.json()).then(d=>{
+            allDrugs = d.drugs || [];
+            document.getElementById('totalDrugs').innerText = allDrugs.length;
+            document.getElementById('quotaDrugs').innerText = allDrugs.filter(x=>x.type==='quota').length;
+            document.getElementById('normalDrugs').innerText = allDrugs.filter(x=>x.type!=='quota').length;
             
-            let citySelect = "<option value=\"all\">همه شهرها</option>";
-            cities.forEach(city => {
-                citySelect += "<option value=\"" + city + "\">" + city + "</option>";
-            });
-            document.getElementById("cityFilter").innerHTML = citySelect;
-        }
-        
-        function selectCity(city) {
-            document.querySelectorAll(".city-tab").forEach(tab => {
-                tab.classList.remove("active");
-                if(tab.dataset.city === city) tab.classList.add("active");
-            });
-            document.getElementById("cityFilter").value = city;
-            filterDrugs();
-        }
-        
-        function filterDrugs() {
-            let search = document.getElementById("searchInput").value.toLowerCase();
-            let city = document.getElementById("cityFilter").value;
-            let sort = document.getElementById("sortSelect").value;
-            
-            let filtered = allDrugs.filter(d => {
-                if(city !== "all" && d.city !== city) return false;
-                if(search && !d.name.toLowerCase().includes(search) && !(d.pharmacy_name && d.pharmacy_name.toLowerCase().includes(search))) return false;
-                return true;
-            });
-            
-            if(sort === "expiry_asc") filtered.sort((a,b) => (a.expiry_value || 999999) - (b.expiry_value || 999999));
-            else if(sort === "expiry_desc") filtered.sort((a,b) => (b.expiry_value || 0) - (a.expiry_value || 0));
-            else if(sort === "newest") filtered.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-            
-            renderDrugsGrid(filtered);
-        }
-        
-        function renderDrugsGrid(drugs) {
-            let html = "";
-            if(drugs.length === 0) {
-                html = "<div style=\"text-align:center;padding:40px;color:#999\">هیچ دارویی یافت نشد</div>";
-            } else {
-                drugs.forEach(drug => {
-                    let isNew = drug.is_new ? "<span class=\"new-badge\">جدید</span>" : "";
-                    let expiryParts = drug.expiry_date ? drug.expiry_date.split(".") : [];
-                    let expiryStatus = "";
-                    if(expiryParts.length === 2) {
-                        let now = new Date();
-                        let exp = new Date(parseInt(expiryParts[0]), parseInt(expiryParts[1]) - 1, 1);
-                        let monthsLeft = (exp.getFullYear() - now.getFullYear()) * 12 + (exp.getMonth() - now.getMonth());
-                        if(monthsLeft < 0) expiryStatus = "<span style=\"background:#f8d7da;padding:2px 6px;border-radius:12px;font-size:10px\">منقضی</span>";
-                        else if(monthsLeft <= 3) expiryStatus = "<span style=\"background:#fff3cd;padding:2px 6px;border-radius:12px;font-size:10px\">" + monthsLeft + " ماه مانده</span>";
-                        else expiryStatus = "<span style=\"background:#d4edda;padding:2px 6px;border-radius:12px;font-size:10px\">" + monthsLeft + " ماه مانده</span>";
-                    }
-                    html += "<div class=\"drug-card\">" +
-                        "<div class=\"drug-card-header\"><span class=\"code\">" + (drug.pharmacy_code || "*****") + "</span>" + isNew + "</div>" +
-                        "<div class=\"drug-card-body\"><div class=\"drug-name\">" + drug.name + "</div>" +
-                        "<div class=\"drug-expiry\"><span>📅 " + (drug.expiry_date || "نامشخص") + "</span> " + expiryStatus + "</div>" +
-                        "<div class=\"drug-pharmacy\">🏥 " + (drug.pharmacy_name || "نامشخص") + (drug.city ? " - " + drug.city : "") + "</div></div>" +
-                        "<div class=\"drug-card-footer\"><span>📦 موجودی: " + drug.quantity + "</span>" +
-                        "<button class=\"add-btn\" onclick=\"selectDrugForExchange(" + drug.id + ", " + drug.user_id + ", '" + drug.name.replace(/'/g, "\\'") + "', '" + (drug.expiry_date || "") + "', " + drug.quantity + ")\">➕ درخواست</button></div></div>";
-                });
-            }
-            document.getElementById("drugsGrid").innerHTML = html;
-        }
-        
-        function selectDrugForExchange(inventoryId, pharmacyId, drugName, expiryDate, quantity) {
-            if(!currentUserId) {
-                showRegisterModal();
-                return;
-            }
-            fetch("/api/add_to_exchange_selection", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({
-                    inventory_id: inventoryId,
-                    target_pharmacy_id: pharmacyId,
-                    drug_name: drugName,
-                    expiry_date: expiryDate,
-                    quantity: quantity
-                })
-            }).then(r=>r.json()).then(data=>{
-                if(data.success) {
-                    alert("داروی " + drugName + " به لیست تبادل اضافه شد");
-                    window.location.href = "/exchange";
+            let quotaHtml = '';
+            let normalHtml = '';
+            allDrugs.forEach(drug=>{
+                let drugHtml = '<div style="padding:8px;margin:5px 0;background:#f8f8f8;border-radius:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+                drugHtml += '<input type="checkbox" class="chk" data-id="'+drug.id+'">';
+                drugHtml += '<span style="flex:1"><strong>'+drug.name+'</strong> - '+drug.quantity+' عدد</span>';
+                drugHtml += '<input type="number" class="qty-'+drug.id+'" value="'+drug.quantity+'" style="width:70px;padding:4px">';
+                drugHtml += '</div>';
+                if(drug.type === 'quota') {
+                    quotaHtml += drugHtml;
                 } else {
-                    alert("خطا: " + data.error);
+                    normalHtml += drugHtml;
                 }
             });
+            document.getElementById('quotaDrugsList').innerHTML = quotaHtml || '<p style="text-align:center;padding:20px;color:#999">هیچ داروی سهمیه‌ای وجود ندارد</p>';
+            document.getElementById('normalDrugsList').innerHTML = normalHtml || '<p style="text-align:center;padding:20px;color:#999">هیچ داروی عادی وجود ندارد</p>';
+        });
+    }
+    
+    function loadOrders() {
+        fetch('/api/get_orders').then(r=>r.json()).then(d=>{
+            allOrders = d.orders || [];
+            renderOrders();
+        }).catch(err=>console.error('Error loading orders:', err));
+    }
+    
+    function renderOrders() {
+        let company = document.getElementById('companyFilter').value;
+        let search = document.getElementById('searchFilter').value.toLowerCase();
+        let filtered = allOrders;
+        if(company !== 'all') filtered = filtered.filter(o=>o.company===company);
+        if(search) filtered = filtered.filter(o=>o.drug_name && o.drug_name.toLowerCase().includes(search));
+        if(filtered.length===0){
+            document.getElementById('ordersList').innerHTML = '<p style="text-align:center;padding:30px;color:#999">هیچ سفارشی ثبت نشده است</p>';
+            return;
         }
-        
-        getPersianDate();
-        loadDrugs();
-        setInterval(loadDrugs, 30000);
+        let html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th>شرکت</th><th>نام دارو</th><th>تعداد</th><th>تاریخ سفارش</th></tr></thead><tbody>';
+        filtered.forEach(o=>{
+            let d = new Date(o.ordered_at);
+            html += '<tr>' + '<td>' + o.company + '</td>' + '<td><strong>' + o.drug_name + '</strong></td>' + '<td>' + o.quantity + '</td>' + '<td>' + d.toLocaleDateString('fa-IR') + '</td>' + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('ordersList').innerHTML = html;
+    }
+    
+    function resetFilters() {
+        document.getElementById('companyFilter').value = 'all';
+        document.getElementById('searchFilter').value = '';
+        renderOrders();
+    }
+    
+    function submitOrder() {
+        let ids = [], qty = {};
+        document.querySelectorAll('.chk:checked').forEach(c=>{
+            let id = parseInt(c.dataset.id);
+            ids.push(id);
+            qty[id] = document.querySelector('.qty-'+id).value;
+        });
+        let company = document.getElementById('company').value;
+        if(!company){ alert('شرکت را انتخاب کنید'); return; }
+        if(ids.length==0){ alert('حداقل یک دارو انتخاب کنید'); return; }
+        fetch('/api/place_order', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({selected_ids:ids, company:company, quantities:qty}) }).then(()=>{ loadDrugs(); loadOrders(); });
+    }
+    
+    document.getElementById('companyFilter').addEventListener('change', renderOrders);
+    document.getElementById('searchFilter').addEventListener('input', renderOrders);
+    loadDrugs();
+    loadOrders();
+    setInterval(loadOrders, 10000);
     </script>
-    '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
-
-@app.route('/api/persian_date')
-def api_persian_date():
-    return jsonify({'date': get_persian_date()})
-
-@app.route('/api/all_drugs_for_exchange')
-def api_all_drugs_for_exchange():
-    db = get_db()
-    drugs = db.execute('''
-        SELECT i.*, u.pharmacy_display_name, u.username, u.address,
-               CASE WHEN u.address LIKE "%تهران%" THEN "تهران"
-                    WHEN u.address LIKE "%اصفهان%" THEN "اصفهان"
-                    WHEN u.address LIKE "%شیراز%" THEN "شیراز"
-                    WHEN u.address LIKE "%کرمانشاه%" THEN "کرمانشاه"
-                    WHEN u.address LIKE "%کردستان%" THEN "کردستان"
-                    ELSE "سایر" END as city
-        FROM inventory i
-        JOIN users u ON i.user_id = u.id
-        WHERE u.is_approved = 1 AND i.quantity > 0
-        ORDER BY i.created_at DESC
-        LIMIT 200
-    ''').fetchall()
-    
-    result = []
-    for row in drugs:
-        drug = dict(row)
-        drug['is_new'] = is_new_item(row['created_at'])
-        drug['expiry_value'] = parse_expiry_date(row['expiry_date']) if row['expiry_date'] else 999999
-        drug['pharmacy_code'] = str(row['user_id'])[:3] + '***'
-        result.append(drug)
-    return jsonify({'drugs': result})
-
-@app.route('/api/add_to_exchange_selection', methods=['POST'])
-@login_required
-def api_add_to_exchange_selection():
-    data = request.json
-    inventory_id = data.get('inventory_id')
-    target_pharmacy_id = data.get('target_pharmacy_id')
-    drug_name = data.get('drug_name')
-    expiry_date = data.get('expiry_date')
-    quantity = data.get('quantity')
-    user = get_current_user_from_session()
-    
-    db = get_db()
-    db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, exchange_date, status, target_pharmacy_id) 
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-        (user['id'], user['pharmacy_display_name'], drug_name, quantity, expiry_date, datetime.now().isoformat(), 'pending', target_pharmacy_id))
-    db.commit()
-    return jsonify({'success': True})
-
-@app.route('/api/get_current_user')
-def api_get_current_user():
-    user = get_current_user_from_session()
-    if user:
-        return jsonify({
-            'logged_in': True,
-            'id': user['id'],
-            'username': user['username'],
-            'pharmacy_display_name': user['pharmacy_display_name'],
-            'is_approved': user['is_approved']
-        })
-    return jsonify({'logged_in': False})
-@app.route('/inventory')
-@login_required
-def inventory():
-    content = '''
-    <div class="card"><div class="card-title">📦 ثبت فاکتور جدید</div>
-    <div class="form-row">
-        <input type="text" id="invName" placeholder="نام دارو" style="flex:2">
-        <input type="number" id="invQty" placeholder="تعداد">
-        <input type="text" id="expiryDate" placeholder="تاریخ انقضا (سال.ماه)">
-        <select id="location"><option value="warehouse">انبار</option><option value="pharmacy">داروخانه</option></select>
-        <button onclick="addInventory()">ثبت فاکتور</button>
-    </div></div>
-    
-    <div class="card"><div class="card-title">💸 ثبت فروش</div>
-    <div class="form-row">
-        <input type="text" id="saleDrugName" placeholder="نام دارو" style="flex:2">
-        <input type="number" id="saleQty" placeholder="تعداد">
-        <input type="text" id="saleExpiry" placeholder="تاریخ انقضا">
-        <button onclick="registerSale()" class="btn-success">ثبت فروش</button>
-    </div></div>
-    
-    <div class="card"><div class="card-title">📊 لیست انبار</div>
-    <div class="form-row">
-        <input type="text" id="liveSearch" placeholder="🔍 جستجو..." onkeyup="filterInventory()" style="flex:2">
-        <button onclick="sortByExpiry()">📅 مرتبسازی (نزدیک)</button>
-        <button onclick="sortByExpiryDesc()">📅 مرتبسازی (دور)</button>
-        <button onclick="hideCheckedItems()" class="btn-warning">🙈 هاید تیکخوردهها</button>
-        <button onclick="resetHiddenItems()" class="btn-warning">🔄 ریست هاید</button>
-        <button onclick="exportToTelegram()" class="btn-success">📱 کپی متن</button>
-    </div>
-    <div id="inventoryGroups"></div></div>
-    
-    <script>
-        let inventoryData=[], currentSort="expiry_asc", currentFilter="", hiddenItemIds=new Set(), HIDDEN_KEY="inv_hidden_"+sessionStorage.getItem("userId");
-        function loadHidden(){let s=localStorage.getItem(HIDDEN_KEY);if(s){try{hiddenItemIds=new Set(JSON.parse(s));}catch(e){}}}
-        function saveHidden(){localStorage.setItem(HIDDEN_KEY,JSON.stringify([...hiddenItemIds]));}
-        loadHidden();
-        
-        function loadInventory(){fetch("/api/get_inventory_by_expiry").then(r=>r.json()).then(data=>{inventoryData=data.groups||[];renderInventory();});}
-        
-        function renderInventory(){
-            let groups=[...inventoryData];
-            if(currentFilter) groups=groups.filter(g=>g.name&&g.name.toLowerCase().includes(currentFilter));
-            if(currentSort==="expiry_asc") groups.sort((a,b)=>(a.expiry_value||999999)-(b.expiry_value||999999));
-            else if(currentSort==="expiry_desc") groups.sort((a,b)=>(b.expiry_value||0)-(a.expiry_value||0));
-            if(groups.length===0){document.getElementById("inventoryGroups").innerHTML="<p style=\"text-align:center;padding:30px\">انبار خالی است</p>";return;}
-            let html="";
-            groups.forEach(group=>{
-                let isExpired=group.expiry_value&&group.expiry_value<(new Date().getFullYear()*12+new Date().getMonth()+1);
-                let groupClass=isExpired?"expired":"";
-                html+="<div class=\"expiry-group\"><div class=\"expiry-group-header "+groupClass+"\" onclick=\"toggleGroup("+group.expiry_value+")\"><span>📅 "+(group.expiry_date||"نامشخص")+"</span><span>مجموع: "+group.total_qty+" عدد</span></div><div class=\"expiry-group-content\" id=\"group-"+group.expiry_value+"\"><div class=\"inventory-header\"><span><input type=\"checkbox\" id=\"selectAll-"+group.expiry_value+"\" onchange=\"toggleSelectAll(this,"+group.expiry_value+")\"></span><span>نام دارو</span><span>تاریخ انقضا</span><span>تعداد</span><span>مکان</span><span>عملیات</span></div>";
-                group.items.forEach(item=>{
-                    let isHidden=hiddenItemIds.has(item.id);
-                    html+="<div class=\"inventory-row\" style=\""+(isHidden?"opacity:0.4":"")+"\"><span><input type=\"checkbox\" class=\"item-checkbox\" data-id=\""+item.id+"\" data-group=\""+group.expiry_value+"\"></span><span><strong>"+item.name+"</strong></span><span>"+(item.expiry_date||"-")+"</span><span>"+item.quantity+"</span><span>"+(item.location==="warehouse"?"انبار":"داروخانه")+"</span><span><button class=\"btn-danger btn-sm\" onclick=\"deleteItem("+item.id+")\">🗑️</button> <button class=\"btn-warning btn-sm\" onclick=\"hideItem("+item.id+")\">🙈</button></span></div>";
-                });
-                html+="</div></div>";
-            });
-            document.getElementById("inventoryGroups").innerHTML=html;
-        }
-        
-        function toggleGroup(expiryValue){let el=document.getElementById("group-"+expiryValue);if(el)el.classList.toggle("show");}
-        function toggleSelectAll(checkbox,expiryValue){document.querySelectorAll(".item-checkbox[data-group=\""+expiryValue+"\"]").forEach(cb=>cb.checked=checkbox.checked);}
-        function hideCheckedItems(){document.querySelectorAll(".item-checkbox:checked").forEach(cb=>{hiddenItemIds.add(parseInt(cb.dataset.id));});saveHidden();renderInventory();}
-        function hideItem(id){hiddenItemIds.add(id);saveHidden();renderInventory();}
-        function resetHiddenItems(){hiddenItemIds.clear();saveHidden();renderInventory();}
-        function filterInventory(){currentFilter=document.getElementById("liveSearch").value.toLowerCase();renderInventory();}
-        function sortByExpiry(){currentSort="expiry_asc";renderInventory();}
-        function sortByExpiryDesc(){currentSort="expiry_desc";renderInventory();}
-        
-        function addInventory(){
-            let fd=new FormData();
-            fd.append("name",document.getElementById("invName").value);
-            fd.append("quantity",document.getElementById("invQty").value);
-            fd.append("expiry_date",document.getElementById("expiryDate").value);
-            fd.append("location",document.getElementById("location").value);
-            fetch("/api/add_inventory",{method:"POST",body:fd}).then(r=>r.json()).then(data=>{if(data.success){alert("ثبت شد");location.reload();}else alert("خطا: "+data.error);});
-        }
-        
-        function registerSale(){
-            fetch("/api/register_sale",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({drug_name:document.getElementById("saleDrugName").value,quantity:parseInt(document.getElementById("saleQty").value),expiry_date:document.getElementById("saleExpiry").value})}).then(r=>r.json()).then(data=>{if(data.success){alert("فروش ثبت شد");location.reload();}else alert("خطا: "+data.error);});
-        }
-        
-        function deleteItem(id){if(confirm("حذف شود؟"))fetch("/api/delete_inventory/"+id,{method:"POST"}).then(()=>loadInventory());}
-        
-        function exportToTelegram(){
-            let selected=[];
-            document.querySelectorAll(".item-checkbox:checked").forEach(cb=>{let id=parseInt(cb.dataset.id);for(let group of inventoryData){let item=group.items.find(i=>i.id===id);if(item){selected.push(item);break;}}});
-            if(selected.length===0){alert("هیچ آیتمی انتخاب نشده");return;}
-            let text="📦 گزارش انبار\\n";
-            selected.forEach(item=>{text+=item.name+" - "+item.quantity+" عدد - "+(item.expiry_date||"نامشخص")+" - "+(item.location==="warehouse"?"انبار":"داروخانه")+"\\n";});
-            navigator.clipboard.writeText(text);alert("کپی شد");
-        }
-        
-        loadInventory();setInterval(loadInventory,30000);
-    </script>
-    <style>.expiry-group-content{display:none;}.expiry-group-content.show{display:block;}</style>
     '''
     return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
 
@@ -908,380 +846,1631 @@ def inventory():
 @login_required
 def deficit():
     content = '''
-    <div class="card"><div class="card-title">➕ افزودن دارو به کسری</div>
-    <div class="form-row">
-        <div class="search-container" style="flex:2;position:relative">
-            <input type="text" id="drugName" placeholder="نام دارو" onkeyup="searchDrugs(this.value)" autocomplete="off">
-            <div id="suggestions" class="suggestions-list"></div>
+    <div class="card">
+        <div class="card-title">➕ افزودن دارو به کسری</div>
+        <div class="form-row">
+            <div class="search-container" style="flex:2">
+                <input type="text" id="drugName" placeholder="نام دارو" onkeyup="searchDrugs(this.value)" autocomplete="off">
+                <div id="suggestions" class="suggestions-list"></div>
+            </div>
+            <input type="number" id="qty" placeholder="تعداد">
+            <select id="type">
+                <option value="normal">عادی</option>
+                <option value="quota">سهمیه ای</option>
+            </select>
+            <select id="priority">
+                <option value="1">اولویت 1</option>
+                <option value="2">اولویت 2</option>
+                <option value="3">اولویت 3</option>
+                <option value="4">اولویت 4</option>
+            </select>
+            <button onclick="addDrug()">➕ افزودن</button>
         </div>
-        <input type="number" id="qty" placeholder="تعداد">
-        <select id="type"><option value="normal">عادی</option><option value="quota">سهمیه ای</option></select>
-        <select id="priority"><option value="1">اولویت 1</option><option value="2">اولویت 2</option><option value="3">اولویت 3</option><option value="4">اولویت 4</option></select>
-        <button onclick="addDrug()">➕ افزودن</button>
-    </div></div>
-    <div class="card"><div class="card-title">📋 لیست داروهای کسری</div>
-    <div class="form-row"><button onclick="deleteSelectedDrugs()" class="btn-danger">🗑️ حذف انتخاب شدهها</button></div>
-    <div id="list"></div></div>
+    </div>
+    
+    <div class="card">
+        <div class="card-title">📋 لیست داروهای کسری</div>
+        <div class="form-row">
+            <button onclick="deleteSelectedDrugs()" class="btn-danger">🗑️ حذف انتخاب شده‌ها</button>
+        </div>
+        <div id="list"></div>
+    </div>
     
     <script>
-        let allDrugs=[];
-        function searchDrugs(query){
-            let suggestions=document.getElementById("suggestions");
-            if(query.length<2){suggestions.style.display="none";return;}
-            fetch("/api/search_with_stock?q="+encodeURIComponent(query)).then(r=>r.json()).then(data=>{
-                if(data.length>0){
-                    let html="";
-                    data.forEach(drug=>{html+="<div onclick=\"selectDrug('"+drug.name.replace(/'/g,"\\'")+"')\"><strong>"+drug.name+"</strong><div class=\"stock-info\">🏭 انبار: "+(drug.warehouse_qty||0)+" | 🏪 داروخانه: "+(drug.pharmacy_qty||0)+"</div></div>";});
-                    suggestions.innerHTML=html;suggestions.style.display="block";
-                }else{suggestions.style.display="none";}
+    let allDrugs = [];
+    
+    function searchDrugs(query) {
+        let suggestions = document.getElementById('suggestions');
+        if(query.length < 2) { suggestions.style.display = 'none'; return; }
+        fetch('/api/search_with_stock?q=' + encodeURIComponent(query))
+            .then(r => r.json())
+            .then(data => {
+                if(data.length > 0) {
+                    let html = '';
+                    data.forEach(drug => {
+                        html += '<div onclick="selectDrug(\\'' + drug.name + '\\')">';
+                        html += '<strong>' + drug.name + '</strong>';
+                        html += '<div class="stock-info">🏭 انبار: ' + drug.warehouse_qty + ' | 🏪 داروخانه: ' + drug.pharmacy_qty + ' | 📅 نزدیک‌ترین انقضا: ' + (drug.nearest_expiry || '-') + '</div>';
+                        html += '</div>';
+                    });
+                    suggestions.innerHTML = html;
+                    suggestions.style.display = 'block';
+                } else {
+                    suggestions.style.display = 'none';
+                }
+            });
+    }
+    
+    function selectDrug(name) {
+        document.getElementById('drugName').value = name;
+        document.getElementById('suggestions').style.display = 'none';
+    }
+    
+    function addDrug() {
+        let fd = new FormData();
+        fd.append('name', document.getElementById('drugName').value);
+        fd.append('quantity', document.getElementById('qty').value);
+        fd.append('type', document.getElementById('type').value);
+        fd.append('priority', document.getElementById('priority').value);
+        fetch('/api/add_drug', {method:'POST', body:fd})
+            .then(r => r.json())
+            .then(data => {
+                if(data.success) {
+                    alert('دارو به کسری اضافه شد');
+                    loadDrugs();
+                } else {
+                    alert('خطا: ' + JSON.stringify(data));
+                }
+            });
+    }
+    
+    function loadDrugs() {
+        fetch('/api/get_all_drugs').then(r=>r.json()).then(d=>{
+            allDrugs = d.drugs || [];
+            renderDrugsList();
+        });
+    }
+    
+    function renderDrugsList() {
+        if(allDrugs.length==0){
+            document.getElementById('list').innerHTML = '<p style="text-align:center;padding:30px;color:#999">لیست کسری خالی است</p>';
+            return;
+        }
+        let html = '<table class="deficit-table"><thead><tr><th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th><th>نام دارو</th><th>تعداد</th><th>نوع</th><th>اولویت</th><th>عملیات</th></tr></thead><tbody>';
+        allDrugs.forEach(d=>{
+            let typeText = d.type=='quota' ? '<span style="color:#28a745">سهمیه ای</span>' : '<span style="color:#17a2b8">عادی</span>';
+            html += '<tr data-id="'+d.id+'">';
+            html += '<td><input type="checkbox" class="drug-checkbox" data-id="'+d.id+'"></td>';
+            html += '<td><strong>' + d.name + '</strong></td>';
+            html += '<td>' + d.quantity + ' عدد</td>';
+            html += '<td>' + typeText + '</td>';
+            html += '<td>' + d.priority + '</td>';
+            html += '<td><button class="btn-danger btn-sm" onclick="del(' + d.id + ')">🗑️ حذف</button></td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('list').innerHTML = html;
+    }
+    
+    function toggleSelectAll(checkbox) {
+        document.querySelectorAll('.drug-checkbox').forEach(cb => cb.checked = checkbox.checked);
+    }
+    
+    function getSelectedDrugIds() {
+        let ids = [];
+        document.querySelectorAll('.drug-checkbox:checked').forEach(cb => {
+            ids.push(parseInt(cb.dataset.id));
+        });
+        return ids;
+    }
+    
+    function deleteSelectedDrugs() {
+        let ids = getSelectedDrugIds();
+        if(ids.length === 0) {
+            alert('حداقل یک دارو را انتخاب کنید');
+            return;
+        }
+        if(confirm(ids.length + ' دارو حذف شود؟')) {
+            fetch('/api/delete_drugs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({drug_ids: ids})
+            }).then(r=>r.json()).then(data=>{
+                if(data.success) {
+                    alert('داروها حذف شدند');
+                    loadDrugs();
+                } else {
+                    alert('خطا: ' + data.error);
+                }
             });
         }
-        function selectDrug(name){document.getElementById("drugName").value=name;document.getElementById("suggestions").style.display="none";}
-        function addDrug(){
-            let fd=new FormData();
-            fd.append("name",document.getElementById("drugName").value);
-            fd.append("quantity",document.getElementById("qty").value);
-            fd.append("type",document.getElementById("type").value);
-            fd.append("priority",document.getElementById("priority").value);
-            fetch("/api/add_drug",{method:"POST",body:fd}).then(r=>r.json()).then(data=>{if(data.success){alert("دارو به کسری اضافه شد");loadDrugs();}else alert("خطا: "+JSON.stringify(data));});
+    }
+    
+    function del(id) {
+        if(confirm('حذف شود؟')) fetch('/api/delete_drug/'+id, {method:'POST'}).then(()=>loadDrugs());
+    }
+    
+    document.addEventListener('click', function(e) {
+        if(!e.target.closest('.search-container')) {
+            document.getElementById('suggestions').style.display = 'none';
         }
-        function loadDrugs(){fetch("/api/get_all_drugs").then(r=>r.json()).then(d=>{allDrugs=d.drugs||[];renderDrugsList();});}
-        function renderDrugsList(){
-            if(allDrugs.length==0){document.getElementById("list").innerHTML="<p style=\"text-align:center;padding:30px\">لیست کسری خالی است</p>";return;}
-            let html="<table class=\"deficit-table\"><thead>汽<th><input type=\"checkbox\" id=\"selectAll\" onchange=\"toggleSelectAll(this)\"></th><th>نام دارو</th><th>تعداد</th><th>نوع</th><th>اولویت</th><th>عملیات</th></thead><tbody>";
-            allDrugs.forEach(d=>{let typeText=d.type=="quota"?"<span style=\"color:#28a745\">سهمیه ای</span>":"<span style=\"color:#17a2b8\">عادی</span>";html+="<tr data-id=\""+d.id+"\">汽<td><input type=\"checkbox\" class=\"drug-checkbox\" data-id=\""+d.id+"\"></td><td><strong>"+d.name+"</strong></td><td>"+d.quantity+" عدد<\/td><td>"+typeText+"<\/td><td>"+d.priority+"<\/td><td><button class=\"btn-danger btn-sm\" onclick=\"del("+d.id+")\">🗑️ حذف</button><\/td><\/tr>";});
-            html+="</tbody></table>";document.getElementById("list").innerHTML=html;
-        }
-        function toggleSelectAll(checkbox){document.querySelectorAll(".drug-checkbox").forEach(cb=>cb.checked=checkbox.checked);}
-        function deleteSelectedDrugs(){let ids=[...document.querySelectorAll(".drug-checkbox:checked")].map(cb=>parseInt(cb.dataset.id));if(ids.length===0){alert("حداقل یک دارو را انتخاب کنید");return;}if(confirm(ids.length+" دارو حذف شود؟")){fetch("/api/delete_drugs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({drug_ids:ids})}).then(r=>r.json()).then(data=>{if(data.success){alert("داروها حذف شدند");loadDrugs();}else alert("خطا: "+data.error);});}}
-        function del(id){if(confirm("حذف شود؟"))fetch("/api/delete_drug/"+id,{method:"POST"}).then(()=>loadDrugs());}
-        document.addEventListener("click",function(e){if(!e.target.closest(".search-container"))document.getElementById("suggestions").style.display="none";});
-        loadDrugs();
+    });
+    
+    loadDrugs();
     </script>
     '''
     return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
 
-@app.route('/dashboard')
+@app.route('/inventory')
 @login_required
-def dashboard():
+def inventory():
     content = '''
-    <div style="display:flex;gap:10px;margin-bottom:20px;border-bottom:2px solid #e0e0e0">
-        <button class="active" onclick="showDashboardTab('assistant')" style="background:none;border:none;padding:10px 20px;cursor:pointer">📋 دستیار خرید</button>
-        <button onclick="showDashboardTab('orders')" style="background:none;border:none;padding:10px 20px;cursor:pointer">📜 سفارشات ثبت شده</button>
+    <div class="card">
+        <div class="card-title">📦 ثبت فاکتور جدید (داروهای رسیده)</div>
+        <div class="form-row">
+            <div class="search-container" style="flex:2">
+                <input type="text" id="invName" placeholder="نام دارو" onkeyup="searchDrugsInv(this.value)" autocomplete="off">
+                <div id="suggestionsInv" class="suggestions-list"></div>
+            </div>
+            <input type="number" id="invQty" placeholder="تعداد">
+            <input type="text" id="expiryDate" placeholder="تاریخ انقضا (سال.ماه)" title="فرمت صحیح: 2026.5 یا 2025.12">
+            <select id="location">
+                <option value="warehouse">انبار</option>
+                <option value="pharmacy">داروخانه</option>
+            </select>
+            <input type="text" id="supplier" placeholder="تامین کننده">
+            <input type="text" id="price" placeholder="قیمت خرید">
+            <button onclick="addInventory()">ثبت فاکتور</button>
+        </div>
+        <div id="expiryError" class="error-text">❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.3)</div>
     </div>
-    <div id="assistantTab" class="tab-content active">
-        <div class="stats-grid"><div class="stat-card"><div class="number" id="totalDrugs">0</div><div class="label">کل داروهای کسری</div></div>
-        <div class="stat-card"><div class="number" id="quotaDrugs">0</div><div class="label">سهمیه ای</div></div>
-        <div class="stat-card"><div class="number" id="normalDrugs">0</div><div class="label">عادی</div></div></div>
-        <div class="card"><div class="card-title">📋 دستیار خرید</div>
-        <div class="form-row"><select id="company"><option value="داروپخش">داروپخش</option><option value="البرز">البرز</option><option value="اکسیر">اکسیر</option><option value="رازی">رازی</option></select><button onclick="submitOrder()">📦 ثبت سفارش</button></div>
-        <div style="display:flex;gap:20px;flex-wrap:wrap"><div style="flex:1"><h4>📦 سهمیه ای</h4><div id="quotaDrugsList"></div></div><div style="flex:1"><h4>📦 عادی</h4><div id="normalDrugsList"></div></div></div></div></div>
-    <div id="ordersTab" class="tab-content" style="display:none"><div class="card"><div class="card-title">🔍 فیلتر سفارشات</div><div class="form-row"><select id="companyFilter"><option value="all">همه شرکت ها</option><option value="داروپخش">داروپخش</option><option value="البرز">البرز</option><option value="اکسیر">اکسیر</option><option value="رازی">رازی</option></select><input type="text" id="searchFilter" placeholder="جستجوی نام دارو..."><button onclick="resetFilters()">حذف فیلتر</button></div></div><div class="card"><div class="card-title">📋 لیست سفارشات</div><div id="ordersList"></div></div></div>
+    <div class="card">
+        <div class="card-title">💸 داروهای رفته (ثبت فروش)</div>
+        <div class="form-row">
+            <div class="search-container" style="flex:2">
+                <input type="text" id="saleDrugName" placeholder="نام دارو" onkeyup="searchDrugsForSale(this.value)" autocomplete="off">
+                <div id="suggestionsSale" class="suggestions-list"></div>
+            </div>
+            <input type="number" id="saleQty" placeholder="تعداد">
+            <input type="text" id="saleExpiry" placeholder="تاریخ انقضا (سال.ماه)">
+            <input type="text" id="saleDate" placeholder="تاریخ فروش">
+            <input type="text" id="customerName" placeholder="نام مشتری">
+            <input type="text" id="salePrice" placeholder="قیمت فروش">
+            <select id="saleLocation">
+                <option value="warehouse">انبار</option>
+                <option value="pharmacy">داروخانه</option>
+            </select>
+            <button onclick="registerSale()" class="btn-success">ثبت فروش</button>
+        </div>
+        <div id="saleExpiryError" class="error-text">❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.3)</div>
+    </div>
+    <div class="card">
+        <div class="card-title">🔄 جابجایی دارو بین مکان‌ها</div>
+        <div class="form-row">
+            <div class="search-container" style="flex:2">
+                <input type="text" id="moveDrug" placeholder="نام دارو" onkeyup="searchDrugsMove(this.value)" autocomplete="off">
+                <div id="suggestionsMove" class="suggestions-list"></div>
+            </div>
+            <input type="number" id="moveQty" placeholder="تعداد">
+            <input type="text" id="moveExpiry" placeholder="تاریخ انقضا (سال.ماه)">
+            <select id="moveFromLocation">
+                <option value="warehouse">انبار</option>
+                <option value="pharmacy">داروخانه</option>
+            </select>
+            <span style="font-size:18px">➡</span>
+            <select id="moveToLocation">
+                <option value="warehouse">انبار</option>
+                <option value="pharmacy">داروخانه</option>
+            </select>
+            <button onclick="moveDrug()">انتقال</button>
+        </div>
+        <div id="moveExpiryError" class="error-text">❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.3)</div>
+    </div>
+    <div class="card">
+        <div class="card-title">📊 لیست انبار (تفکیک شده بر اساس تاریخ انقضا)</div>
+        <div class="form-row">
+            <input type="text" id="liveSearch" placeholder="🔍 جستجوی زنده نام دارو..." onkeyup="filterInventory()" style="flex:2">
+            <button onclick="selectAllItems()" class="btn-sm">✅ انتخاب همه</button>
+            <button onclick="deselectAll()" class="btn-sm">❌ لغو همه</button>
+            <button onclick="exportToTelegram()" class="export-btn">📱 کپی متن (تلگرام)</button>
+            <button onclick="hideCheckedItems()" class="hide-btn">🙈 هاید تیک‌خورده‌ها</button>
+            <button onclick="resetHiddenItems()" class="hide-btn">🔄 ریست هاید</button>
+        </div>
+        <div id="stats" class="stats-grid"></div>
+        <div class="inventory-wrapper">
+            <div class="inventory-table" id="list"></div>
+        </div>
+    </div>
     <script>
-        let allDrugs=[], allOrders=[];
-        function showDashboardTab(tab){document.getElementById("assistantTab").style.display=tab==="assistant"?"block":"none";document.getElementById("ordersTab").style.display=tab==="orders"?"block":"none";if(tab==="assistant")loadDrugs();else loadOrders();}
-        function loadDrugs(){fetch("/api/get_drugs").then(r=>r.json()).then(d=>{allDrugs=d.drugs||[];document.getElementById("totalDrugs").innerText=allDrugs.length;document.getElementById("quotaDrugs").innerText=allDrugs.filter(x=>x.type==="quota").length;document.getElementById("normalDrugs").innerText=allDrugs.filter(x=>x.type!=="quota").length;let qHtml="",nHtml="";allDrugs.forEach(d=>{let dh="<div style=\"padding:8px;margin:5px 0;background:#f8f8f8;border-radius:8px;display:flex;gap:8px;align-items:center\"><input type=\"checkbox\" class=\"chk\" data-id=\""+d.id+"\"><span style=\"flex:1\"><strong>"+d.name+"</strong> - "+d.quantity+" عدد</span><input type=\"number\" class=\"qty-"+d.id+"\" value=\""+d.quantity+"\" style=\"width:70px;padding:4px\"></div>";if(d.type==="quota")qHtml+=dh;else nHtml+=dh;});document.getElementById("quotaDrugsList").innerHTML=qHtml||"<p style=\"text-align:center;padding:20px\">هیچ داروی سهمیهای وجود ندارد</p>";document.getElementById("normalDrugsList").innerHTML=nHtml||"<p style=\"text-align:center;padding:20px\">هیچ داروی عادی وجود ندارد</p>";});}
-        function loadOrders(){fetch("/api/get_orders").then(r=>r.json()).then(d=>{allOrders=d.orders||[];renderOrders();});}
-        function renderOrders(){let company=document.getElementById("companyFilter").value,search=document.getElementById("searchFilter").value.toLowerCase(),filtered=allOrders.filter(o=>(company==="all"||o.company===company)&&(!search||o.drug_name.toLowerCase().includes(search)));if(filtered.length===0){document.getElementById("ordersList").innerHTML="<p style=\"text-align:center;padding:30px\">هیچ سفارشی ثبت نشده است</p>";return;}let html="<table style=\"width:100%;border-collapse:collapse\"><thead><tr><th>شرکت</th><th>نام دارو</th><th>تعداد</th><th>تاریخ سفارش</th></tr></thead><tbody>";filtered.forEach(o=>{let d=new Date(o.ordered_at);html+=`<tr><td>${o.company}</td><td><strong>${o.drug_name}</strong></td><td>${o.quantity}</td><td>${d.toLocaleDateString("fa-IR")}</td></tr>`;});html+="</tbody></table>";document.getElementById("ordersList").innerHTML=html;}
-        function resetFilters(){document.getElementById("companyFilter").value="all";document.getElementById("searchFilter").value="";renderOrders();}
-        function submitOrder(){let ids=[],qty={};document.querySelectorAll(".chk:checked").forEach(c=>{let id=parseInt(c.dataset.id);ids.push(id);qty[id]=document.querySelector(".qty-"+id).value;});let company=document.getElementById("company").value;if(!company){alert("شرکت را انتخاب کنید");return;}if(ids.length==0){alert("حداقل یک دارو انتخاب کنید");return;}fetch("/api/place_order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({selected_ids:ids,company:company,quantities:qty})}).then(()=>{loadDrugs();loadOrders();});}
-        document.getElementById("companyFilter").addEventListener("change",renderOrders);document.getElementById("searchFilter").addEventListener("input",renderOrders);loadDrugs();loadOrders();
+    let inventoryData = [];
+    let currentFilter = '';
+    let hiddenItemIds = new Set();
+    const HIDDEN_KEY = 'inventory_hidden_' + sessionStorage.getItem('userId');
+    
+    function loadHiddenItems() {
+        let saved = localStorage.getItem(HIDDEN_KEY);
+        if(saved) { try { hiddenItemIds = new Set(JSON.parse(saved)); } catch(e) {} }
+    }
+    function saveHiddenItems() { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hiddenItemIds])); }
+    loadHiddenItems();
+    
+    function getExpiryStatusJS(expiryDate) {
+        if(!expiryDate) return { text: 'نامشخص', class: '' };
+        let p = expiryDate.split('.');
+        if(p.length != 2) return { text: 'نامشخص', class: '' };
+        let now = new Date();
+        let expYear = parseInt(p[0]);
+        let expMonth = parseInt(p[1]) - 1;
+        let exp = new Date(expYear, expMonth, 1);
+        let monthsLeft = (exp.getFullYear() - now.getFullYear()) * 12 + (exp.getMonth() - now.getMonth());
+        if(monthsLeft < 0) return { text: '🔴 منقضی', class: 'expired' };
+        if(monthsLeft <= 3) return { text: '🟡 ' + monthsLeft + ' ماه مانده', class: 'expiring-soon' };
+        return { text: '🟢 ' + monthsLeft + ' ماه مانده', class: 'good-expiry' };
+    }
+    
+    function validateExpiryFormat(expiry) {
+        if(!expiry) return false;
+        let pattern = /^\\d{4}\\.([1-9]|1[0-2])$/;
+        return pattern.test(expiry);
+    }
+    
+    function filterInventory() {
+        currentFilter = document.getElementById('liveSearch')?.value.toLowerCase() || '';
+        renderInventory();
+    }
+    
+    function selectAllItems() {
+        document.querySelectorAll('.item-checkbox').forEach(cb => cb.checked = true);
+    }
+    
+    function deselectAll() {
+        document.querySelectorAll('.item-checkbox').forEach(cb => cb.checked = false);
+    }
+    
+    function hideCheckedItems() {
+        let checkedIds = [];
+        document.querySelectorAll('.item-checkbox:checked').forEach(cb => {
+            let id = parseInt(cb.dataset.id);
+            checkedIds.push(id);
+            hiddenItemIds.add(id);
+        });
+        saveHiddenItems();
+        renderInventory();
+        alert(checkedIds.length + ' آیتم هاید شد');
+    }
+    
+    function resetHiddenItems() {
+        hiddenItemIds.clear();
+        saveHiddenItems();
+        renderInventory();
+        alert('همه آیتم‌ها دوباره نمایش داده می‌شوند');
+    }
+    
+    function exportToTelegram() {
+        let selectedItems = [];
+        document.querySelectorAll('.item-checkbox:checked').forEach(cb => {
+            let id = parseInt(cb.dataset.id);
+            for(let drug of inventoryData) {
+                for(let group of drug.groups) {
+                    let item = group.items.find(i => i.id === id);
+                    if(item) { selectedItems.push(item); break; }
+                }
+            }
+        });
+        if(selectedItems.length === 0) { alert('هیچ آیتمی انتخاب نشده است'); return; }
+        let pharmacyName = document.getElementById('pharmacyDisplayName')?.innerText || 'داروخانه';
+        let now = new Date();
+        let text = "📦 گزارش انبار - " + pharmacyName + "\\n📅 " + now.toLocaleDateString('fa-IR') + "\\n─────────────────────\\n\\n";
+        let grouped = {};
+        selectedItems.forEach(item => { if(!grouped[item.name]) grouped[item.name] = []; grouped[item.name].push(item); });
+        for(let name in grouped) {
+            text += "【 " + name + " 】\\n";
+            grouped[name].forEach(item => { text += "  📅 " + (item.expiry_date || 'نامشخص') + " ← " + item.quantity + " عدد\\n"; });
+            text += "\\n";
+        }
+        text += "─────────────────────\\n📌 مجموع اقلام: " + selectedItems.length;
+        let textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('✅ متن در کلیپبورد کپی شد');
+    }
+    
+    function renderInventory() {
+        let filteredData = inventoryData.filter(drug => drug.name.toLowerCase().includes(currentFilter));
+        let totalItems = filteredData.reduce((a,b)=>a+b.total_qty,0);
+        let warehouseTotal = filteredData.reduce((a,b)=>a+b.warehouse_qty,0);
+        let pharmacyTotal = filteredData.reduce((a,b)=>a+b.pharmacy_qty,0);
+        document.getElementById('stats').innerHTML = `<div class="stat-card"><div class="number">${filteredData.length}</div><div class="label">کل داروها</div></div>
+            <div class="stat-card"><div class="number">${warehouseTotal}</div><div class="label">انبار</div></div>
+            <div class="stat-card"><div class="number">${pharmacyTotal}</div><div class="label">داروخانه</div></div>`;
+        
+        if(filteredData.length===0){ document.getElementById('list').innerHTML = '<p style="text-align:center;padding:30px;color:#999">انبار خالی است</p>'; return; }
+        let html = '';
+        filteredData.forEach(drug => {
+            html += '<div class="drug-group" style="margin-bottom:15px;border:1px solid #ddd;border-radius:8px;overflow:hidden">';
+            html += '<div class="drug-header" style="background:#f0f0f0;padding:12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleDrugGroup(' + drug.id + ')">';
+            html += '<span style="font-weight:bold">📦 ' + drug.name + '</span>';
+            html += '<span>🏭 انبار: ' + drug.warehouse_qty + ' | 🏪 داروخانه: ' + drug.pharmacy_qty + ' | مجموع: ' + drug.total_qty + '</span>';
+            html += '</div><div id="drug-group-' + drug.id + '" class="drug-details" style="display:none">';
+            
+            drug.groups.forEach(group => {
+                let groupStatus = getExpiryStatusJS(group.expiry_date);
+                html += '<div class="expiry-group">';
+                html += '<div class="expiry-group-header" style="background:' + (groupStatus.class === 'expired' ? '#f8d7da' : (groupStatus.class === 'expiring-soon' ? '#fff3cd' : '#d4edda')) + '">';
+                html += '<span>📅 ' + group.expiry_date + '</span>';
+                html += '<span class="expiry-status ' + groupStatus.class + '">' + groupStatus.text + '</span>';
+                html += '</div><div class="expiry-group-items">';
+                group.items.forEach(item => {
+                    let isHidden = hiddenItemIds.has(item.id);
+                    let locText = item.location == 'warehouse' ? 'انبار' : 'داروخانه';
+                    let locClass = item.location == 'warehouse' ? 'location-warehouse' : 'location-pharmacy';
+                    html += '<div class="inventory-row ' + (isHidden ? 'hidden-item' : '') + '" style="display:grid;grid-template-columns:30px 1.5fr 1fr 0.8fr 1fr 0.8fr;gap:10px;padding:8px 12px;align-items:center;border-bottom:1px solid #eee">';
+                    html += '<input type="checkbox" class="item-checkbox" data-id="' + item.id + '">';
+                    html += '<span><strong>' + item.name + '</strong></span>';
+                    html += '<span>' + (item.expiry_date || '-') + '</span>';
+                    html += '<span>' + item.quantity + '</span>';
+                    html += '<span><span class="location-badge ' + locClass + '">' + locText + '</span></span>';
+                    html += '<span><button class="btn-danger btn-sm" onclick="delItem(' + item.id + ')">🗑️</button></span>';
+                    html += '</div>';
+                });
+                html += '</div></div>';
+            });
+            html += '</div></div>';
+        });
+        document.getElementById('list').innerHTML = html;
+    }
+    
+    function toggleDrugGroup(id) {
+        let el = document.getElementById('drug-group-' + id);
+        if(el.style.display === 'none') el.style.display = 'block';
+        else el.style.display = 'none';
+    }
+    
+    function loadInventory() { 
+        fetch('/api/get_inventory_grouped_by_expiry').then(r=>r.json()).then(d=>{ 
+            inventoryData = d.drugs || []; 
+            renderInventory(); 
+        }); 
+    }
+    
+    function searchDrugsInv(query) {
+        let suggestions = document.getElementById('suggestionsInv');
+        if(query.length < 2) { suggestions.style.display = 'none'; return; }
+        fetch('/api/search_with_stock?q=' + encodeURIComponent(query)).then(r=>r.json()).then(data=>{
+            if(data.length > 0) {
+                let html = '';
+                data.forEach(drug => { html += '<div onclick="selectDrugInv(\\'' + drug.name + '\\')"><strong>' + drug.name + '</strong><div class="stock-info">🏭 انبار: ' + drug.warehouse_qty + ' | 🏪 داروخانه: ' + drug.pharmacy_qty + ' | 📅 نزدیک‌ترین انقضا: ' + (drug.nearest_expiry || '-') + '</div></div>'; });
+                suggestions.innerHTML = html;
+                suggestions.style.display = 'block';
+            } else { suggestions.style.display = 'none'; }
+        });
+    }
+    
+    function searchDrugsForSale(query) {
+        let suggestions = document.getElementById('suggestionsSale');
+        if(query.length < 2) { suggestions.style.display = 'none'; return; }
+        fetch('/api/search_with_stock?q=' + encodeURIComponent(query)).then(r=>r.json()).then(data=>{
+            if(data.length > 0) {
+                let html = '';
+                data.forEach(drug => { html += '<div onclick="selectDrugForSale(\\'' + drug.name + '\\')"><strong>' + drug.name + '</strong><div class="stock-info">🏭 انبار: ' + drug.warehouse_qty + ' | 🏪 داروخانه: ' + drug.pharmacy_qty + ' | 📅 نزدیک‌ترین انقضا: ' + (drug.nearest_expiry || '-') + '</div></div>'; });
+                suggestions.innerHTML = html;
+                suggestions.style.display = 'block';
+            } else { suggestions.style.display = 'none'; }
+        });
+    }
+    
+    function searchDrugsMove(query) {
+        let suggestions = document.getElementById('suggestionsMove');
+        if(query.length < 2) { suggestions.style.display = 'none'; return; }
+        fetch('/api/search_with_stock?q=' + encodeURIComponent(query)).then(r=>r.json()).then(data=>{
+            if(data.length > 0) {
+                let html = '';
+                data.forEach(drug => { html += '<div onclick="selectDrugMove(\\'' + drug.name + '\\')"><strong>' + drug.name + '</strong><div class="stock-info">🏭 انبار: ' + drug.warehouse_qty + ' | 🏪 داروخانه: ' + drug.pharmacy_qty + ' | 📅 نزدیک‌ترین انقضا: ' + (drug.nearest_expiry || '-') + '</div></div>'; });
+                suggestions.innerHTML = html;
+                suggestions.style.display = 'block';
+            } else { suggestions.style.display = 'none'; }
+        });
+    }
+    
+    function selectDrugInv(name) { document.getElementById('invName').value = name; document.getElementById('suggestionsInv').style.display = 'none'; }
+    function selectDrugForSale(name) { document.getElementById('saleDrugName').value = name; document.getElementById('suggestionsSale').style.display = 'none'; }
+    function selectDrugMove(name) { document.getElementById('moveDrug').value = name; document.getElementById('suggestionsMove').style.display = 'none'; }
+    
+    function registerSale() {
+        let name = document.getElementById('saleDrugName').value;
+        let qty = document.getElementById('saleQty').value;
+        let saleExpiry = document.getElementById('saleExpiry').value;
+        if(!name || !qty || !saleExpiry) { alert('نام دارو، تعداد و تاریخ انقضا اجباری است'); return; }
+        if(!validateExpiryFormat(saleExpiry)) { alert('❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'); return; }
+        fetch('/api/register_sale', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+            drug_name: name, quantity: parseInt(qty), expiry_date: saleExpiry,
+            sale_date: document.getElementById('saleDate').value, customer_name: document.getElementById('customerName').value,
+            price: parseFloat(document.getElementById('salePrice').value) || 0, location: document.getElementById('saleLocation').value
+        }) }).then(r=>r.json()).then(res => { if(res.success) { alert('فروش ثبت شد'); location.reload(); } else { alert('خطا: ' + res.error); } });
+    }
+    
+    function addInventory() {
+        let expiry = document.getElementById('expiryDate').value;
+        if(expiry && !validateExpiryFormat(expiry)) { alert('❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.3)'); return; }
+        let fd = new FormData();
+        fd.append('name', document.getElementById('invName').value);
+        fd.append('quantity', document.getElementById('invQty').value);
+        fd.append('expiry_date', expiry);
+        fd.append('location', document.getElementById('location').value);
+        fd.append('supplier', document.getElementById('supplier').value);
+        fd.append('purchase_price', document.getElementById('price').value);
+        fetch('/api/add_inventory', {method:'POST', body:fd}).then(r=>r.json()).then(data=>{ if(data.success) { alert('دارو ثبت شد'); location.reload(); } else { alert('خطا: ' + JSON.stringify(data)); } });
+    }
+    
+    function moveDrug() {
+        let name = document.getElementById('moveDrug').value, qty = document.getElementById('moveQty').value, fromLoc = document.getElementById('moveFromLocation').value, toLoc = document.getElementById('moveToLocation').value, expiry = document.getElementById('moveExpiry').value;
+        if(!name || !qty || !expiry){ alert('نام دارو، تعداد و تاریخ انقضا را وارد کنید'); return; }
+        if(!validateExpiryFormat(expiry)) { alert('❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'); return; }
+        fetch('/api/move_inventory', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, quantity:parseInt(qty), from_location:fromLoc, to_location:toLoc, expiry_date:expiry}) }).then(r=>r.json()).then(data=>{ if(data.success) alert('انتقال انجام شد'); else alert('خطا: '+data.error); location.reload(); });
+    }
+    
+    function delItem(id) { if(confirm('حذف شود؟')) fetch('/api/delete_inventory/'+id, {method:'POST'}).then(()=>loadInventory()); }
+    
+    document.addEventListener('click', function(e) {
+        if(!e.target.closest('.search-container')) {
+            ['suggestionsInv','suggestionsSale','suggestionsMove'].forEach(id => { let s = document.getElementById(id); if(s) s.style.display = 'none'; });
+        }
+    });
+    loadInventory();
     </script>
     '''
     return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
 
-@app.route('/chat')
+@app.route('/exchange')
 @login_required
-def chat():
-    content = f'''
-    <div class="chat-container">
-        <div class="conversations-list" id="conversationsList"><div style="padding:20px;text-align:center">در حال بارگذاری...</div></div>
-        <div class="chat-area" id="chatArea" style="display:none">
-            <div class="chat-header"><h3 id="chatPartnerName"></h3><button class="btn-success btn-sm" onclick="goToExchangeWithPartner()">🔄 درخواست تبادل</button></div>
-            <div class="chat-messages" id="chatMessages"></div>
-            <div class="chat-input-area">
-                <textarea id="messageInput" class="chat-input" placeholder="پیام خود را بنویسید..." rows="1"></textarea>
-                <input type="file" id="imageInput" accept="image/*" style="display:none">
-                <button class="chat-btn" onclick="document.getElementById('imageInput').click()">📷</button>
-                <button class="chat-btn" id="voiceBtn">🎤</button>
-                <button class="chat-btn" onclick="sendMessage()">📤</button>
+def exchange():
+    content = '''
+    <div class="exchange-tab">
+        <button class="active" onclick="showExchangeTab('register')">🔄 تبادل دارو</button>
+        <button onclick="showExchangeTab('list')">📋 تبادلات من</button>
+        <button onclick="showExchangeTab('pending')">⏳ تبادلات دریافتی</button>
+    </div>
+    
+    <div id="registerTab" class="tab-content active">
+        <div class="card">
+            <div class="card-title">🔍 جستجوی سریع دارو در تمام داروخانه‌ها</div>
+            <div class="form-row">
+                <div class="search-container" style="flex:3">
+                    <input type="text" id="globalDrugSearch" placeholder="نام دارو را وارد کنید..." onkeyup="searchGlobalDrugs(this.value)" autocomplete="off">
+                    <div id="globalDrugSuggestions" class="suggestions-list"></div>
+                </div>
+                <button onclick="resetExchangeSelection()" class="btn-warning">🔄 ریست انتخاب‌ها</button>
+            </div>
+            <div id="selectedDrugInfo" style="display:none; margin-top:10px; padding:10px; background:#e8f5e9; border-radius:8px;"></div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📋 دسته‌بندی مصرفی داروخانه من</div>
+            <div class="category-checkboxes" id="categoryCheckboxes">
+                <label><input type="checkbox" value="heart"> ❤️ قلب</label>
+                <label><input type="checkbox" value="respiratory"> 🌬️ تنفس</label>
+                <label><input type="checkbox" value="women"> 👩 زنان</label>
+                <label><input type="checkbox" value="orthopedic"> 🦵 ارتوپد</label>
+                <label><input type="checkbox" value="urology"> 🚽 ارولوژی</label>
+                <label><input type="checkbox" value="endocrine"> 🧬 غدد</label>
+                <label><input type="checkbox" value="neurology"> 🧠 مغز و اعصاب</label>
+                <label><input type="checkbox" value="dermatology"> 🧴 پوست</label>
+                <label><input type="checkbox" value="pediatric"> 👶 کودکان</label>
+                <label><input type="checkbox" value="eye"> 👁️ چشم</label>
+                <label><input type="checkbox" value="other"> 📦 سایر</label>
+            </div>
+            <button onclick="saveUserCategories()" class="btn-success">💾 ذخیره دسته‌بندی</button>
+        </div>
+        
+        <div id="exchangeDualView" style="margin-top:20px;">
+            <div class="exchange-list-box">
+                <div class="exchange-list-header">
+                    🏥 لیست داروخانه‌ها
+                </div>
+                <div class="exchange-list-items" id="pharmaciesList"></div>
+            </div>
+            
+            <div id="selectedDrugsContainer" style="margin-top:20px; display:none;">
+                <div class="exchange-summary" id="exchangeSummary">
+                    <strong>📊 داروهای انتخاب شده از داروخانه‌ها:</strong><br>
+                    <span id="summaryText">هیچ دارویی انتخاب نشده است</span>
+                    <div style="margin-top:15px;">
+                        <button onclick="confirmExchangeFinal()" class="btn-success">✅ ارسال درخواست تبادل</button>
+                        <button onclick="resetExchangeSelection()" class="btn-warning">🔄 ریست انتخاب‌ها</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    <script>
-        let currentPartnerId=null,mediaRecorder=null,audioChunks=[],isRecording=false;
-        function loadConversations(){fetch("/api/get_conversations").then(r=>r.json()).then(data=>{let html="";if(data.conversations.length===0)html="<div style=\"padding:20px;text-align:center;color:#999\">هیچ گفتگویی وجود ندارد</div>";else data.conversations.forEach(conv=>{let activeClass=(currentPartnerId==conv.partner_id)?"active":"";html+="<div class=\"conversation-item "+activeClass+"\" onclick=\"loadChat("+conv.partner_id+",'"+conv.partner_name.replace(/'/g,"\\'")+"')\"><div class=\"conversation-name\">"+conv.partner_name+"</div><div class=\"conversation-last-msg\">"+(conv.last_message||"بدون پیام")+"</div><div class=\"conversation-time\">"+(conv.last_time||"")+"</div></div>";});document.getElementById("conversationsList").innerHTML=html;});}
-        function loadChat(partnerId,partnerName){currentPartnerId=partnerId;document.getElementById("chatPartnerName").innerText=partnerName;document.getElementById("chatArea").style.display="flex";document.getElementById("chatArea").style.flexDirection="column";fetch("/api/get_chat_messages/"+partnerId).then(r=>r.json()).then(data=>{let html="";data.messages.forEach(msg=>{let isSent=(msg.sender_id=={session['user_id']});html+="<div class=\"message "+(isSent?"sent":"received")+"\"><div class=\"message-bubble\">";if(msg.message_type==="text")html+=msg.message;else if(msg.message_type==="image")html+="<img src=\""+msg.file_url+"\" class=\"message-img\" onclick=\"window.open(this.src)\">";else if(msg.message_type==="voice")html+="<audio controls class=\"message-audio\" src=\""+msg.file_url+"\"></audio>";html+="<div style=\"font-size:10px;margin-top:5px;opacity:0.7\">"+new Date(msg.created_at).toLocaleTimeString("fa-IR")+"</div></div></div>";});document.getElementById("chatMessages").innerHTML=html;document.getElementById("chatMessages").scrollTop=document.getElementById("chatMessages").scrollHeight;});}
-        let pendingImage=null;document.getElementById("imageInput").addEventListener("change",function(e){if(e.target.files&&e.target.files[0]){pendingImage=e.target.files[0];alert("عکس انتخاب شد. برای ارسال دکمه ارسال را بزنید.");}});
-        function sendMessage(){let message=document.getElementById("messageInput").value;if(!message.trim()&&!pendingImage)return;let formData=new FormData();formData.append("receiver_id",currentPartnerId);formData.append("message",message);if(pendingImage){formData.append("image",pendingImage);pendingImage=null;}fetch("/api/send_message",{method:"POST",body:formData}).then(r=>r.json()).then(data=>{if(data.success){document.getElementById("messageInput").value="";loadChat(currentPartnerId,document.getElementById("chatPartnerName").innerText);loadConversations();}else alert("خطا: "+data.error);});}
-        document.getElementById("voiceBtn").addEventListener("click",async function(){if(isRecording){mediaRecorder.stop();isRecording=false;this.style.backgroundColor="";this.innerText="🎤";return;}try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});mediaRecorder=new MediaRecorder(stream);audioChunks=[];mediaRecorder.ondataavailable=event=>audioChunks.push(event.data);mediaRecorder.onstop=()=>{const audioBlob=new Blob(audioChunks,{type:"audio/webm"});const formData=new FormData();formData.append("receiver_id",currentPartnerId);formData.append("voice",audioBlob,"voice.webm");fetch("/api/send_voice",{method:"POST",body:formData}).then(r=>r.json()).then(data=>{if(data.success){loadChat(currentPartnerId,document.getElementById("chatPartnerName").innerText);loadConversations();}else alert("خطا در ارسال ویس");});stream.getTracks().forEach(track=>track.stop());};mediaRecorder.start();isRecording=true;this.style.backgroundColor="#dc3545";this.innerText="⏹️";}catch(err){alert("دسترسی به میکروفون امکان‌پذیر نیست");}});
-        function goToExchangeWithPartner(){window.location.href="/exchange_with_partner/"+currentPartnerId;}
-        loadConversations();setInterval(()=>{if(currentPartnerId)loadChat(currentPartnerId,document.getElementById("chatPartnerName").innerText);loadConversations();},5000);
-    </script>
-    '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
-
-@app.route('/exchange_with_partner/<int:partner_id>')
-@login_required
-def exchange_with_partner(partner_id):
-    return redirect(url_for('index'))
-
-@app.route('/admin')
-def admin_login():
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/admin/dashboard')
-def admin_dashboard():
-    db = get_db()
-    pending_users = db.execute("SELECT COUNT(*) as count FROM users WHERE is_approved = 0 AND username != 'admin_system'").fetchone()['count']
-    pending_users_list = db.execute("SELECT id, username, phone, address, created_at FROM users WHERE is_approved = 0 AND username != 'admin_system' ORDER BY created_at DESC").fetchall()
     
-    content = f'''
-    <div style="display:flex;gap:20px;margin-bottom:30px"><div class="stat-card"><div class="number">{pending_users}</div><div class="label">در انتظار تایید</div></div></div>
-    <div class="card"><div class="card-title">📝 درخواست‌های ثبت‌نام</div>
-    <table style="width:100%;border-collapse:collapse"><thead><tr><th>نام</th><th>تلفن</th><th>آدرس</th><th>عملیات</th></tr></thead><tbody>
-    {''.join([f'<tr><td>{u["username"]}</td><td>{u["phone"]}</td><td>{u["address"][:30]}</td><td><button onclick="approveUser({u["id"]})">✓ تایید</button> <button onclick="rejectUser({u["id"]})">✗ رد</button></td></tr>' for u in pending_users_list]) or '<tr><td colspan="4">هیچ درخواستی نیست</td></tr>'}
-    </tbody></table></div>
+    <div id="listTab" class="tab-content">
+        <div class="card">
+            <div class="card-title">📋 تبادلات ثبت شده (من)</div>
+            <div class="exchange-filter">
+                <input type="text" id="exchangePharmacyFilter" placeholder="🔍 فیلتر نام داروخانه..." onkeyup="filterMyExchanges()" style="width:100%;padding:8px;border-radius:8px;border:1px solid #ddd;">
+            </div>
+            <div class="exchanges-wrapper" id="myExchangesList"></div>
+        </div>
+    </div>
+    
+    <div id="pendingTab" class="tab-content">
+        <div class="card">
+            <div class="card-title">⏳ تبادلات دریافتی</div>
+            <div id="pendingExchangesList"></div>
+        </div>
+    </div>
+    
     <script>
-        function approveUser(id){{fetch("/admin/api/approve_user",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{user_id:id}})}}).then(()=>location.reload());}}
-        function rejectUser(id){{fetch("/admin/api/reject_user",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{user_id:id}})}}).then(()=>location.reload());}}
+    let selectedItems = [];
+    let userCategories = [];
+    let allPharmacies = [];
+    let allMyExchanges = [];
+    let currentPharmacyDrugs = {};
+    
+    function loadUserCategories() {
+        fetch('/api/get_user_categories').then(r=>r.json()).then(data=>{
+            userCategories = data.categories || [];
+            document.querySelectorAll('#categoryCheckboxes input').forEach(cb => {
+                cb.checked = userCategories.includes(cb.value);
+            });
+        });
+    }
+    
+    function saveUserCategories() {
+        let categories = [];
+        document.querySelectorAll('#categoryCheckboxes input:checked').forEach(cb => {
+            categories.push(cb.value);
+        });
+        fetch('/api/save_user_categories', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({categories: categories})
+        }).then(r=>r.json()).then(data=>{
+            if(data.success) {
+                alert('دسته‌بندی مصرفی ذخیره شد');
+                userCategories = categories;
+            } else {
+                alert('خطا: ' + data.error);
+            }
+        });
+    }
+    
+    function getExpiryStatusText(expiryDate) {
+        if(!expiryDate) return { text: 'نامشخص', class: '' };
+        try {
+            let parts = expiryDate.split('.');
+            if(parts.length !== 2) return { text: 'نامعتبر', class: '' };
+            let now = new Date();
+            let expYear = parseInt(parts[0]), expMonth = parseInt(parts[1]) - 1;
+            let exp = new Date(expYear, expMonth, 1);
+            let monthsLeft = (exp.getFullYear() - now.getFullYear()) * 12 + (exp.getMonth() - now.getMonth());
+            if(monthsLeft < 0) return { text: '🔴 منقضی', class: 'expired' };
+            if(monthsLeft <= 3) return { text: '🟡 ' + monthsLeft + ' ماه مانده', class: 'expiring-soon' };
+            return { text: '🟢 ' + monthsLeft + ' ماه مانده', class: 'good-expiry' };
+        } catch(e) { return { text: 'نامعتبر', class: '' }; }
+    }
+    
+    function loadPharmacies() {
+        fetch('/api/get_other_pharmacies').then(r=>r.json()).then(data=>{
+            allPharmacies = data.pharmacies || [];
+            renderPharmaciesList();
+        }).catch(err=>console.error('Error loading pharmacies:', err));
+    }
+    
+    function renderPharmaciesList() {
+        let container = document.getElementById('pharmaciesList');
+        if(!container) return;
+        if(allPharmacies.length === 0) {
+            container.innerHTML = '<div style="padding:20px;text-align:center;color:#999">هیچ داروخانه دیگری وجود ندارد</div>';
+            return;
+        }
+        let html = '';
+        allPharmacies.forEach(pharmacy => {
+            let drugCount = pharmacy.drug_count || 0;
+            let nearestStatus = pharmacy.nearest_status || '';
+            html += '<div class="pharmacy-accordion">';
+            html += '<div class="pharmacy-header" onclick="togglePharmacy(' + pharmacy.id + ')">';
+            html += '<span class="pharmacy-name">🏥 ' + pharmacy.name + '</span>';
+            html += '<div><span class="drug-count">📦 ' + drugCount + ' دارو</span>';
+            html += '<span class="chat-btn" onclick="event.stopPropagation(); openChat(' + pharmacy.id + ', \'' + pharmacy.name + '\')">💬 چت</span>';
+            html += '</div></div>';
+            html += '<div id="pharmacy-content-' + pharmacy.id + '" class="pharmacy-content">';
+            html += '<div style="padding:10px;text-align:center;color:#666">در حال بارگذاری...</div>';
+            html += '</div></div>';
+            loadPharmacyDrugs(pharmacy.id);
+        });
+        container.innerHTML = html;
+    }
+    
+    function togglePharmacy(pharmacyId) {
+        let content = document.getElementById('pharmacy-content-' + pharmacyId);
+        if(!content) return;
+        if(content.classList.contains('show')) {
+            content.classList.remove('show');
+        } else {
+            content.classList.add('show');
+        }
+    }
+    
+    function loadPharmacyDrugs(pharmacyId) {
+        fetch('/api/get_pharmacy_drugs_grouped_for_exchange?pharmacy_id=' + pharmacyId)
+            .then(r=>r.json())
+            .then(data=>{
+                if(data && data.groups) {
+                    currentPharmacyDrugs[pharmacyId] = data.groups || [];
+                } else {
+                    currentPharmacyDrugs[pharmacyId] = [];
+                }
+                renderPharmacyDrugs(pharmacyId);
+            })
+            .catch(err=>{
+                console.error('Error loading pharmacy drugs:', err);
+                currentPharmacyDrugs[pharmacyId] = [];
+                renderPharmacyDrugs(pharmacyId);
+            });
+    }
+    
+    function renderPharmacyDrugs(pharmacyId) {
+        let container = document.getElementById('pharmacy-content-' + pharmacyId);
+        if(!container) return;
+        let groups = currentPharmacyDrugs[pharmacyId] || [];
+        if(groups.length === 0) {
+            container.innerHTML = '<div style="padding:20px;text-align:center;color:#999">هیچ دارویی موجود نیست</div>';
+            container.classList.add('show');
+            return;
+        }
+        let html = '';
+        groups.forEach(group => {
+            if(!group.items || group.items.length === 0) return;
+            let groupStatus = getExpiryStatusText(group.expiry_date);
+            html += '<div class="expiry-group">';
+            html += '<div class="expiry-group-header" style="background:' + (groupStatus.class === 'expired' ? '#f8d7da' : (groupStatus.class === 'expiring-soon' ? '#fff3cd' : '#d4edda')) + '">';
+            html += '<span>📅 ' + group.expiry_date + '</span>';
+            html += '<span class="expiry-status ' + groupStatus.class + '">' + groupStatus.text + '</span>';
+            html += '</div><div class="expiry-group-items">';
+            group.items.forEach(drug => {
+                let isSelected = selectedItems.some(item => item.pharmacy_id === pharmacyId && item.id === drug.id);
+                html += '<div class="exchange-drug-item ' + (isSelected ? 'selected' : '') + '" onclick="toggleDrugSelection(' + pharmacyId + ', ' + drug.id + ', \'' + drug.name.replace(/'/g, "\\\\'") + '\', ' + drug.quantity + ', \'' + (drug.expiry_date || '') + '\')">';
+                html += '<input type="checkbox" class="exchange-drug-check" ' + (isSelected ? 'checked' : '') + ' onchange="event.stopPropagation(); toggleDrugSelection(' + pharmacyId + ', ' + drug.id + ', \'' + drug.name.replace(/'/g, "\\\\'") + '\', ' + drug.quantity + ', \'' + (drug.expiry_date || '') + '\')">';
+                html += '<div class="exchange-drug-info"><div class="exchange-drug-name">' + drug.name + '</div>';
+                html += '<div class="exchange-drug-detail">📦 موجودی: ' + drug.quantity + ' عدد</div></div>';
+                if(isSelected) {
+                    let selectedItem = selectedItems.find(item => item.pharmacy_id === pharmacyId && item.id === drug.id);
+                    let qty = selectedItem ? selectedItem.quantity : drug.quantity;
+                    html += '<input type="number" class="exchange-qty-input" value="' + qty + '" min="1" max="' + drug.quantity + '" onchange="updateSelectedQuantity(' + pharmacyId + ', ' + drug.id + ', this.value)" onclick="event.stopPropagation()">';
+                }
+                html += '</div>';
+            });
+            html += '</div></div>';
+        });
+        container.innerHTML = html;
+        container.classList.add('show');
+    }
+    
+    function toggleDrugSelection(pharmacyId, drugId, name, maxQty, expiryDate) {
+        let existingIndex = selectedItems.findIndex(item => item.pharmacy_id === pharmacyId && item.id === drugId);
+        if(existingIndex !== -1) {
+            selectedItems.splice(existingIndex, 1);
+        } else {
+            let pharmacy = allPharmacies.find(p => p.id === pharmacyId);
+            selectedItems.push({
+                pharmacy_id: pharmacyId,
+                pharmacy_name: pharmacy ? pharmacy.name : '',
+                id: drugId,
+                name: name,
+                quantity: maxQty,
+                max_quantity: maxQty,
+                expiry_date: expiryDate
+            });
+        }
+        renderPharmacyDrugs(pharmacyId);
+        renderSummary();
+        
+        if(selectedItems.length > 0) {
+            document.getElementById('selectedDrugsContainer').style.display = 'block';
+        } else {
+            document.getElementById('selectedDrugsContainer').style.display = 'none';
+        }
+    }
+    
+    function updateSelectedQuantity(pharmacyId, drugId, newQuantity) {
+        let item = selectedItems.find(item => item.pharmacy_id === pharmacyId && item.id === drugId);
+        if(item) {
+            let qty = parseInt(newQuantity);
+            if(isNaN(qty)) qty = item.max_quantity;
+            if(qty < 1) qty = 1;
+            if(qty > item.max_quantity) qty = item.max_quantity;
+            item.quantity = qty;
+        }
+        renderPharmacyDrugs(pharmacyId);
+        renderSummary();
+    }
+    
+    function renderSummary() {
+        if(selectedItems.length === 0) {
+            document.getElementById('summaryText').innerHTML = 'هیچ دارویی انتخاب نشده است';
+            return;
+        }
+        let grouped = {};
+        selectedItems.forEach(item => {
+            if(!grouped[item.pharmacy_id]) {
+                grouped[item.pharmacy_id] = {
+                    name: item.pharmacy_name,
+                    items: []
+                };
+            }
+            grouped[item.pharmacy_id].items.push(item);
+        });
+        
+        let html = '';
+        for(let phId in grouped) {
+            let ph = grouped[phId];
+            html += '<div style="margin-bottom:15px;border-right:3px solid #1a1a1a;padding-right:10px">';
+            html += '<strong>🏥 ' + ph.name + ':</strong><br>';
+            ph.items.forEach(item => {
+                html += '• ' + item.name + ' - ' + item.quantity + ' عدد (📅 ' + (item.expiry_date || 'نامشخص') + ')<br>';
+            });
+            html += '</div>';
+        }
+        document.getElementById('summaryText').innerHTML = html;
+    }
+    
+    function resetExchangeSelection() {
+        selectedItems = [];
+        for(let phId in currentPharmacyDrugs) {
+            renderPharmacyDrugs(parseInt(phId));
+        }
+        renderSummary();
+        document.getElementById('selectedDrugsContainer').style.display = 'none';
+        document.getElementById('selectedDrugInfo').style.display = 'none';
+        document.getElementById('globalDrugSearch').value = '';
+        let suggestions = document.getElementById('globalDrugSuggestions');
+        if(suggestions) suggestions.style.display = 'none';
+    }
+    
+    function confirmExchangeFinal() {
+        if(selectedItems.length === 0) {
+            alert('هیچ دارویی برای تبادل انتخاب نشده است');
+            return;
+        }
+        
+        let groupedByPharmacy = {};
+        selectedItems.forEach(item => {
+            if(!groupedByPharmacy[item.pharmacy_id]) {
+                groupedByPharmacy[item.pharmacy_id] = {
+                    pharmacy_id: item.pharmacy_id,
+                    pharmacy_name: item.pharmacy_name,
+                    items: []
+                };
+            }
+            groupedByPharmacy[item.pharmacy_id].items.push({
+                id: item.id,
+                name: item.name,
+                quantity: item.quantity,
+                expiry_date: item.expiry_date
+            });
+        });
+        
+        let summary = '';
+        for(let phId in groupedByPharmacy) {
+            let ph = groupedByPharmacy[phId];
+            summary += `\\n🏥 ${ph.pharmacy_name}:\\n`;
+            ph.items.forEach(i => summary += `  - ${i.name}: ${i.quantity} عدد\\n`);
+        }
+        
+        if(!confirm(`آیا از ارسال درخواست تبادل اطمینان دارید؟\\n\\n${summary}\\nتوجه: شما فقط می‌توانید از داروهای خودتان برای تبادل بدهید. لطفاً ابتدا درخواست تبادل را ارسال کنید تا داروخانه هدف پاسخ دهد.`)) return;
+        
+        let promises = [];
+        for(let phId in groupedByPharmacy) {
+            let ph = groupedByPharmacy[phId];
+            let data = {
+                target_pharmacy_id: ph.pharmacy_id,
+                requested_items: ph.items
+            };
+            promises.push(fetch('/api/request_exchange', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).then(r=>r.json()));
+        }
+        
+        Promise.all(promises).then(results => {
+            let allSuccess = results.every(r => r && r.success);
+            if(allSuccess) {
+                alert('✅ درخواست تبادل با موفقیت ارسال شد');
+                resetExchangeSelection();
+                loadExchanges();
+                loadPendingExchanges();
+            } else {
+                alert('❌ خطا در ارسال برخی درخواست‌ها');
+            }
+        }).catch(err=>{
+            console.error('Error in exchange request:', err);
+            alert('❌ خطا در ارسال درخواست تبادل');
+        });
+    }
+    
+    function searchGlobalDrugs(query) {
+        let suggestions = document.getElementById('globalDrugSuggestions');
+        if(!suggestions) return;
+        if(query.length < 2) { suggestions.style.display = 'none'; return; }
+        fetch('/api/search_global_drugs?q=' + encodeURIComponent(query))
+            .then(r => r.json())
+            .then(data => {
+                if(data && data.length > 0) {
+                    let html = '';
+                    data.forEach(drug => {
+                        let sourceText = drug.pharmacy_name || '';
+                        let expiryStatus = getExpiryStatusText(drug.expiry_date);
+                        html += '<div onclick="selectGlobalDrug(' + drug.pharmacy_id + ', \\'' + (drug.pharmacy_name || '').replace(/'/g, "\\\\'") + '\\', \\'' + drug.name.replace(/'/g, "\\\\'") + '\\', ' + drug.quantity + ', \\'' + (drug.expiry_date || '') + '\\', ' + drug.id + ')">';
+                        html += '<strong>' + drug.name + '</strong>';
+                        html += '<div class="stock-info">' + sourceText + ' | 📦 موجودی: ' + drug.quantity + ' | 📅 ' + (drug.expiry_date || '-') + ' ' + expiryStatus.text + '</div>';
+                        html += '</div>';
+                    });
+                    suggestions.innerHTML = html;
+                    suggestions.style.display = 'block';
+                } else {
+                    suggestions.innerHTML = '<div style="padding:10px;color:#999">نتیجه‌ای یافت نشد</div>';
+                    suggestions.style.display = 'block';
+                }
+            })
+            .catch(err=>{
+                console.error('Error searching global drugs:', err);
+                suggestions.style.display = 'none';
+            });
+    }
+    
+    function selectGlobalDrug(pharmacyId, pharmacyName, drugName, quantity, expiryDate, drugId) {
+        let content = document.getElementById('pharmacy-content-' + pharmacyId);
+        if(content && !content.classList.contains('show')) {
+            content.classList.add('show');
+        }
+        toggleDrugSelection(pharmacyId, drugId, drugName, quantity, expiryDate);
+        let info = document.getElementById('selectedDrugInfo');
+        if(info) {
+            info.innerHTML = '✅ داروی <strong>' + drugName + '</strong> از داروخانه <strong>' + pharmacyName + '</strong> به لیست انتخاب اضافه شد';
+            info.style.display = 'block';
+        }
+        let suggestions = document.getElementById('globalDrugSuggestions');
+        if(suggestions) suggestions.style.display = 'none';
+        document.getElementById('globalDrugSearch').value = '';
+        setTimeout(() => {
+            if(info) info.style.display = 'none';
+        }, 3000);
+    }
+    
+    function filterMyExchanges() {
+        let filter = document.getElementById('exchangePharmacyFilter').value.toLowerCase();
+        let filtered = allMyExchanges.filter(ex => ex.buyer_name && ex.buyer_name.toLowerCase().includes(filter));
+        renderMyExchangesList(filtered);
+    }
+    
+    function renderMyExchangesList(exchanges) {
+        let container = document.getElementById('myExchangesList');
+        if(!container) return;
+        if(!exchanges || exchanges.length===0){ 
+            container.innerHTML = '<p style="text-align:center;padding:30px;color:#999">هیچ تبادلی ثبت نشده است</p>'; 
+            return; 
+        }
+        let html = '';
+        exchanges.forEach(ex => {
+            let d = new Date(ex.exchange_date);
+            let statusClass = ex.status == 'confirmed' ? 'status-confirmed' : 'status-pending';
+            let statusText = ex.status == 'confirmed' ? 'تایید شده' : 'در انتظار تایید';
+            let requestedItems = [];
+            try {
+                requestedItems = ex.target_items_json ? JSON.parse(ex.target_items_json) : [];
+            } catch(e) { requestedItems = []; }
+            
+            html += `
+                <div class="exchange-card" style="border:1px solid #e0e0e0;border-radius:8px;margin-bottom:10px;overflow:hidden;">
+                    <div class="exchange-card-header" style="background:#f8f9fa;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
+                        <h4 style="margin:0;cursor:pointer;" onclick="openChat(${ex.target_pharmacy_id || 0}, '${ex.buyer_name}')">🏥 ${ex.buyer_name} 💬</h4>
+                        <div class="date" style="color:#666;font-size:12px;">${d.toLocaleDateString('fa-IR')} ${d.toLocaleTimeString('fa-IR')}</div>
+                    </div>
+                    <div class="exchange-card-body" style="padding:10px 12px;">
+                        <div class="exchange-section">
+                            <div class="exchange-section-title" style="font-weight:bold;font-size:13px;">📦 داروهای درخواستی از داروخانه ${ex.buyer_name}:</div>
+                            <ul class="exchange-drug-list" style="list-style:none;padding:0;margin:5px 0;">
+                                ${requestedItems.map(i => `<li style="padding:3px 0;font-size:13px;"><strong>${i.name}</strong> <span style="color:#666;">${i.quantity} عدد (انقضا: ${i.expiry_date || '-'})</span></li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="exchange-card-footer" style="background:#f8f9fa;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
+                        <span class="badge ${statusClass}" style="padding:3px 10px;border-radius:12px;font-size:12px;">${statusText}</span>
+                        <button class="btn-sm" onclick="openChat(${ex.target_pharmacy_id || 0}, '${ex.buyer_name}')" style="background:#17a2b8;color:white;border:none;padding:4px 12px;border-radius:20px;cursor:pointer;">💬 چت</button>
+                    </div>
+                </div>
+            `;
+        });
+        container.innerHTML = html;
+    }
+    
+    function loadExchanges() {
+        fetch('/api/get_exchanges').then(r=>r.json()).then(d=>{
+            allMyExchanges = d.exchanges || [];
+            renderMyExchangesList(allMyExchanges);
+        }).catch(err=>console.error('Error loading exchanges:', err));
+    }
+    
+    function loadPendingExchanges() {
+        fetch('/api/get_pending_exchanges').then(r=>r.json()).then(d=>{
+            let exchanges = d.exchanges || [];
+            let container = document.getElementById('pendingExchangesList');
+            if(!container) return;
+            if(exchanges.length===0){ 
+                container.innerHTML = '<p style="text-align:center;padding:30px;color:#999">هیچ تبادل دریافتی در انتظار تایید نیست</p>'; 
+                return; 
+            }
+            let html = '';
+            exchanges.forEach(ex => {
+                let d = new Date(ex.exchange_date);
+                let requestedItems = [];
+                let offeredItems = [];
+                try {
+                    requestedItems = ex.target_items_json ? JSON.parse(ex.target_items_json) : [];
+                    offeredItems = ex.my_items_json ? JSON.parse(ex.my_items_json) : [];
+                } catch(e) {}
+                let categoriesText = getCategoryNames(ex.sender_categories);
+                html += `
+                    <div class="exchange-card" style="border:1px solid #e0e0e0;border-radius:8px;margin-bottom:10px;overflow:hidden;">
+                        <div class="exchange-card-header" style="background:#f8f9fa;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
+                            <h4 style="margin:0;cursor:pointer;" onclick="openChat(${ex.target_pharmacy_id || 0}, '${ex.source_pharmacy_name || ''}')">🏥 ${ex.source_pharmacy_name || ''} 💬</h4>
+                            <div class="date" style="color:#666;font-size:12px;">${d.toLocaleDateString('fa-IR')} ${d.toLocaleTimeString('fa-IR')}</div>
+                        </div>
+                        <div class="exchange-card-body" style="padding:10px 12px;">
+                            <div class="exchange-section">
+                                <div class="exchange-section-title" style="font-weight:bold;font-size:13px;">📦 داروهایی که از شما درخواست کرده:</div>
+                                <ul class="exchange-drug-list" style="list-style:none;padding:0;margin:5px 0;">
+                                    ${requestedItems.map(i => `<li style="padding:3px 0;font-size:13px;"><strong>${i.name}</strong> <span style="color:#666;">${i.quantity} عدد (انقضا: ${i.expiry_date || '-'})</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div class="exchange-section" style="margin-top:10px;">
+                                <div class="exchange-section-title" style="font-weight:bold;font-size:13px;">📦 داروهایی که به شما می‌دهد:</div>
+                                <ul class="exchange-drug-list" style="list-style:none;padding:0;margin:5px 0;">
+                                    ${offeredItems.map(i => `<li style="padding:3px 0;font-size:13px;"><strong>${i.name}</strong> <span style="color:#666;">${i.quantity} عدد (انقضا: ${i.expiry_date || '-'})</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            ${categoriesText ? `<div class="exchange-section" style="margin-top:10px;"><div class="exchange-section-title" style="font-weight:bold;font-size:13px;">📋 علاقه‌مندی به دسته‌های مصرفی:</div><div style="font-size:13px;">${categoriesText}</div></div>` : ''}
+                        </div>
+                        <div class="exchange-card-footer" style="background:#f8f9fa;padding:8px 12px;display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn-success" onclick="confirmPendingExchange(${ex.id})" style="background:#28a745;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">✅ تایید تبادل</button>
+                            <button class="btn-danger" onclick="rejectPendingExchange(${ex.id})" style="background:#dc3545;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">❌ رد درخواست</button>
+                            <button class="btn-sm" onclick="openChat(${ex.target_pharmacy_id || 0}, '${ex.source_pharmacy_name || ''}')" style="background:#17a2b8;color:white;border:none;padding:4px 12px;border-radius:20px;cursor:pointer;">💬 چت</button>
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }).catch(err=>console.error('Error loading pending exchanges:', err));
+    }
+    
+    function getCategoryNames(categoriesStr) {
+        if(!categoriesStr) return '';
+        let cats = categoriesStr.split(',');
+        let names = [];
+        let catMap = {
+            'heart': '❤️ قلب', 'respiratory': '🌬️ تنفس', 'women': '👩 زنان', 'orthopedic': '🦵 ارتوپد',
+            'urology': '🚽 ارولوژی', 'endocrine': '🧬 غدد', 'neurology': '🧠 مغز و اعصاب', 'dermatology': '🧴 پوست',
+            'pediatric': '👶 کودکان', 'eye': '👁️ چشم', 'other': '📦 سایر'
+        };
+        cats.forEach(c => { if(catMap[c]) names.push(catMap[c]); });
+        return names.join('  |  ');
+    }
+    
+    function confirmPendingExchange(exchangeId) {
+        if(confirm('آیا از تایید این تبادل اطمینان دارید؟')) {
+            fetch('/api/confirm_exchange/' + exchangeId, { method: 'POST' }).then(r=>r.json()).then(data=>{ 
+                if(data && data.success) { 
+                    alert('تبادل تایید شد'); 
+                    loadPendingExchanges(); 
+                    loadExchanges(); 
+                } else { 
+                    alert('خطا: ' + (data && data.error ? data.error : 'خطای ناشناخته')); 
+                } 
+            }).catch(err=>alert('خطا در ارتباط با سرور'));
+        }
+    }
+    
+    function rejectPendingExchange(exchangeId) {
+        if(confirm('آیا از رد این تبادل اطمینان دارید؟')) {
+            fetch('/api/reject_exchange/' + exchangeId, { method: 'POST' }).then(r=>r.json()).then(data=>{ 
+                if(data && data.success) { 
+                    alert('تبادل رد شد'); 
+                    loadPendingExchanges(); 
+                } else { 
+                    alert('خطا: ' + (data && data.error ? data.error : 'خطای ناشناخته')); 
+                } 
+            }).catch(err=>alert('خطا در ارتباط با سرور'));
+        }
+    }
+    
+    function showExchangeTab(tab) {
+        document.querySelectorAll('#registerTab, #listTab, #pendingTab').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.exchange-tab button').forEach(btn => btn.classList.remove('active'));
+        if(tab === 'register') { 
+            document.getElementById('registerTab').classList.add('active'); 
+            document.querySelector('.exchange-tab button:first-child').classList.add('active');
+            loadPharmacies();
+        }
+        else if(tab === 'list') { 
+            document.getElementById('listTab').classList.add('active'); 
+            document.querySelector('.exchange-tab button:nth-child(2)').classList.add('active'); 
+            loadExchanges(); 
+        }
+        else { 
+            document.getElementById('pendingTab').classList.add('active'); 
+            document.querySelector('.exchange-tab button:nth-child(3)').classList.add('active'); 
+            loadPendingExchanges(); 
+        }
+    }
+    
+    document.addEventListener('click', function(e) { 
+        if(!e.target.closest('.search-container')) {
+            let suggestions = document.getElementById('globalDrugSuggestions');
+            if(suggestions) suggestions.style.display = 'none';
+        }
+    });
+    loadUserCategories();
+    loadPharmacies();
+    loadExchanges();
+    loadPendingExchanges();
     </script>
     '''
     return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
 
-@app.route('/admin/api/approve_user', methods=['POST'])
-def admin_approve_user():
-    data = request.json
-    db = get_db()
-    db.execute("UPDATE users SET is_approved = 1, approved_at = ? WHERE id = ?", (datetime.now().isoformat(), data['user_id']))
-    db.commit()
-    return jsonify({'success': True})
+# ==================== API ENDPOINTS ====================
 
-@app.route('/admin/api/reject_user', methods=['POST'])
-def admin_reject_user():
-    data = request.json
-    db = get_db()
-    db.execute("DELETE FROM users WHERE id = ?", (data['user_id'],))
-    db.commit()
-    return jsonify({'success': True})
-
-# APIهای انبارداری
-@app.route('/api/get_inventory_by_expiry')
+@app.route('/api/send_message', methods=['POST'])
 @login_required
-def api_get_inventory_by_expiry():
-    user = get_current_user_from_session()
+def send_message():
     db = get_db()
-    items = db.execute('SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0', (user['id'],)).fetchall()
+    from_user_id = session['user_id']
+    data = request.get_json()
+    to_user_id = data.get('to_user_id')
+    message_type = data.get('message_type', 'text')
+    content = data.get('content', '')
+    
+    file_url = None
+    if message_type in ['image', 'audio'] and content.startswith('data:'):
+        if message_type == 'image':
+            ext = 'png'
+            if 'image/jpeg' in content: ext = 'jpg'
+            elif 'image/png' in content: ext = 'png'
+            elif 'image/gif' in content: ext = 'gif'
+        else:
+            ext = 'webm'
+            if 'audio/mpeg' in content: ext = 'mp3'
+            elif 'audio/wav' in content: ext = 'wav'
+            elif 'audio/ogg' in content: ext = 'ogg'
+        
+        content = re.sub('^data:audio/.+;base64,', '', content)
+        content = re.sub('^data:image/.+;base64,', '', content)
+        
+        filename = f"{uuid.uuid4().hex}.{ext}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        try:
+            with open(filepath, 'wb') as f:
+                f.write(base64.b64decode(content))
+            file_url = f'/uploads/{filename}'
+        except:
+            file_url = None
+    
+    db.execute('''INSERT INTO chat_messages (from_user_id, to_user_id, message_type, content, file_url, created_at, is_read)
+                  VALUES (?, ?, ?, ?, ?, ?, 0)''',
+               (from_user_id, to_user_id, message_type, content if message_type == 'text' else '', file_url, datetime.now().isoformat()))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_messages')
+@login_required
+def get_messages():
+    db = get_db()
+    user_id = session['user_id']
+    other_user_id = request.args.get('other_user_id', type=int)
+    if not other_user_id:
+        return jsonify({'messages': []})
+    
+    cursor = db.execute('''SELECT * FROM chat_messages 
+                          WHERE (from_user_id = ? AND to_user_id = ?)
+                          OR (from_user_id = ? AND to_user_id = ?)
+                          ORDER BY created_at ASC''',
+                       (user_id, other_user_id, other_user_id, user_id))
+    messages = [dict(row) for row in cursor.fetchall()]
+    
+    db.execute("UPDATE chat_messages SET is_read = 1 WHERE from_user_id = ? AND to_user_id = ?", (other_user_id, user_id))
+    db.commit()
+    
+    return jsonify({'messages': messages})
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+@app.route('/api/get_user_categories')
+@login_required
+def get_user_categories():
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    categories = row['categories'].split(',') if row and row['categories'] else []
+    return jsonify({'categories': categories})
+
+@app.route('/api/save_user_categories', methods=['POST'])
+@login_required
+def save_user_categories():
+    user_id = session['user_id']
+    data = request.get_json()
+    categories = data.get('categories', [])
+    categories_str = ','.join(categories)
+    db = get_db()
+    db.execute("INSERT OR REPLACE INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, categories_str))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_other_pharmacies')
+@login_required
+def get_other_pharmacies():
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT id, pharmacy_display_name as name FROM users WHERE id != ?", (user_id,))
+    pharmacies = []
+    for row in cursor.fetchall():
+        cursor2 = db.execute("SELECT COUNT(*) as count, MIN(expiry_date) as nearest FROM inventory WHERE user_id = ? AND quantity > 0", (row['id'],))
+        stats = cursor2.fetchone()
+        drug_count = stats['count'] or 0
+        nearest = stats['nearest']
+        status = ''
+        if nearest:
+            expiry_status = get_expiry_status(nearest)
+            status = expiry_status['text']
+        pharmacies.append({
+            'id': row['id'],
+            'name': row['name'],
+            'drug_count': drug_count,
+            'nearest_status': status
+        })
+    return jsonify({'pharmacies': pharmacies})
+
+@app.route('/api/get_pharmacy_drugs_grouped_for_exchange')
+@login_required
+def get_pharmacy_drugs_grouped_for_exchange():
+    pharmacy_id = request.args.get('pharmacy_id', type=int)
+    if not pharmacy_id:
+        return jsonify({'groups': []})
+    db = get_db()
+    cursor = db.execute("SELECT id, name, quantity, expiry_date, location, created_at FROM inventory WHERE user_id = ? AND quantity > 0", (pharmacy_id,))
+    items = [dict(row) for row in cursor.fetchall()]
+    
     groups = {}
     for item in items:
-        exp = item['expiry_date'] or 'نامشخص'
-        if exp not in groups:
-            groups[exp] = {'expiry_date': exp, 'expiry_value': parse_expiry_date(exp) if exp != 'نامشخص' else 999999, 'total_qty': 0, 'items': [], 'name': item['name']}
-        groups[exp]['items'].append(dict(item))
-        groups[exp]['total_qty'] += item['quantity']
-    return jsonify({'groups': list(groups.values())})
+        expiry = item['expiry_date'] or 'نامشخص'
+        if expiry not in groups:
+            groups[expiry] = []
+        groups[expiry].append(item)
+    
+    for expiry in groups:
+        groups[expiry].sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    
+    result_groups = []
+    for expiry, group_items in groups.items():
+        status = get_expiry_status(expiry)
+        result_groups.append({
+            'expiry_date': expiry,
+            'status_class': status['class'],
+            'status_text': status['text'],
+            'items': group_items
+        })
+    
+    result_groups.sort(key=lambda g: parse_expiry_number(g['expiry_date']))
+    
+    return jsonify({'groups': result_groups})
 
-@app.route('/api/add_inventory', methods=['POST'])
+@app.route('/api/request_exchange', methods=['POST'])
 @login_required
-def api_add_inventory():
-    user = get_current_user_from_session()
-    name = request.form.get('name')
-    quantity = request.form.get('quantity')
-    expiry_date = request.form.get('expiry_date')
-    location = request.form.get('location', 'warehouse')
-    if not name or not quantity:
-        return jsonify({'success': False, 'error': 'نام و تعداد الزامی است'})
-    if expiry_date and not validate_expiry_date(expiry_date):
-        return jsonify({'success': False, 'error': 'فرمت تاریخ نامعتبر'})
+def request_exchange():
     db = get_db()
-    db.execute('INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (user['id'], name, int(quantity), expiry_date, location, datetime.now().isoformat()))
+    user_id = session['user_id']
+    data = request.get_json()
+    target_pharmacy_id = data.get('target_pharmacy_id')
+    requested_items = data.get('requested_items', [])
+    
+    cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    sender_categories = row['categories'] if row else ''
+    
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
+    sender_name = cursor.fetchone()['pharmacy_display_name']
+    
+    if not target_pharmacy_id:
+        return jsonify({'success': False, 'error': 'داروخانه هدف انتخاب نشده است'})
+    
+    for item in requested_items:
+        db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, target_items_json)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)''',
+                   (target_pharmacy_id, sender_name, item.get('name'), item.get('quantity'), item.get('expiry_date'), 'pharmacy', datetime.now().isoformat(), user_id, sender_categories, json.dumps(requested_items)))
+    
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/api/register_sale', methods=['POST'])
+@app.route('/api/search_global_drugs')
 @login_required
-def api_register_sale():
-    user = get_current_user_from_session()
-    data = request.json
+def search_global_drugs():
+    q = request.args.get('q', '')
+    user_id = session['user_id']
     db = get_db()
-    item = db.execute('SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0 LIMIT 1',
-        (user['id'], data['drug_name'], data['expiry_date'])).fetchone()
-    if not item:
-        return jsonify({'success': False, 'error': 'دارو یافت نشد'})
-    new_qty = item['quantity'] - int(data['quantity'])
-    if new_qty < 0:
-        return jsonify({'success': False, 'error': 'موجودی کافی نیست'})
-    db.execute('UPDATE inventory SET quantity = ? WHERE id = ?', (new_qty, item['id']))
-    db.execute('INSERT INTO sales (user_id, drug_name, quantity, sale_date, expiry_date, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (user['id'], data['drug_name'], data['quantity'], datetime.now().isoformat(), data['expiry_date'], datetime.now().isoformat()))
+    results = []
+    
+    cursor = db.execute("SELECT id, pharmacy_display_name as name FROM users WHERE id != ?", (user_id,))
+    for ph in cursor.fetchall():
+        cursor2 = db.execute("SELECT id, name, quantity, expiry_date, created_at FROM inventory WHERE user_id = ? AND name LIKE ? AND quantity > 0 LIMIT 10", (ph['id'], f'%{q}%'))
+        for drug in cursor2.fetchall():
+            results.append({
+                'id': drug['id'],
+                'name': drug['name'],
+                'pharmacy_id': ph['id'],
+                'pharmacy_name': ph['name'],
+                'quantity': drug['quantity'],
+                'expiry_date': drug['expiry_date'] or ''
+            })
+    
+    seen = set()
+    unique_results = []
+    for r in results:
+        key = f"{r['name']}_{r['pharmacy_id']}"
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+    
+    return jsonify(unique_results[:50])
+
+@app.route('/api/get_pending_exchanges')
+@login_required
+def get_pending_exchanges():
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("""
+        SELECT e.*, u.pharmacy_display_name as source_pharmacy_name 
+        FROM exchanges e 
+        JOIN users u ON e.target_pharmacy_id = u.id 
+        WHERE e.user_id = ? AND e.status = 'pending'
+        ORDER BY e.exchange_date DESC
+    """, (user_id,))
+    return jsonify({'exchanges': [dict(row) for row in cursor.fetchall()]})
+
+@app.route('/api/confirm_exchange/<int:exchange_id>', methods=['POST'])
+@login_required
+def confirm_exchange(exchange_id):
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
+    exchange = cursor.fetchone()
+    if not exchange:
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا تایید شده است'})
+    
+    requested_items = json.loads(exchange['target_items_json']) if exchange['target_items_json'] else []
+    for item in requested_items:
+        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ?", 
+                           (user_id, item.get('name'), item.get('expiry_date')))
+        inv_items = cursor.fetchall()
+        
+        total_available = sum(i['quantity'] for i in inv_items)
+        if total_available < item.get('quantity'):
+            return jsonify({'success': False, 'error': f'موجودی {item.get("name")} کافی نیست. موجودی: {total_available} عدد'})
+        
+        remaining = item.get('quantity')
+        for inv_item in inv_items:
+            if remaining <= 0:
+                break
+            take = min(inv_item['quantity'], remaining)
+            new_qty = inv_item['quantity'] - take
+            if new_qty == 0:
+                db.execute("DELETE FROM inventory WHERE id = ?", (inv_item['id'],))
+            else:
+                db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
+            remaining -= take
+    
+    db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/api/delete_inventory/<int:item_id>', methods=['POST'])
+@app.route('/api/reject_exchange/<int:exchange_id>', methods=['POST'])
 @login_required
-def api_delete_inventory(item_id):
-    user = get_current_user_from_session()
+def reject_exchange(exchange_id):
     db = get_db()
-    db.execute('DELETE FROM inventory WHERE id = ? AND user_id = ?', (item_id, user['id']))
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
+    if not cursor.fetchone():
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
+    db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
     db.commit()
     return jsonify({'success': True})
 
-# APIهای دفتر کسری
-@app.route('/api/get_all_drugs')
+@app.route('/api/get_exchanges')
 @login_required
-def api_get_all_drugs():
-    user = get_current_user_from_session()
+def get_exchanges():
     db = get_db()
-    drugs = db.execute('SELECT * FROM drugs WHERE user_id = ? AND ordered = 0 ORDER BY priority ASC', (user['id'],)).fetchall()
-    return jsonify({'drugs': [dict(row) for row in drugs]})
-
-@app.route('/api/add_drug', methods=['POST'])
-@login_required
-def api_add_drug():
-    user = get_current_user_from_session()
-    db = get_db()
-    db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (user['id'], request.form['name'], int(request.form['quantity']), request.form['type'], int(request.form['priority']), datetime.now().isoformat()))
-    db.commit()
-    return jsonify({'success': True})
-
-@app.route('/api/delete_drug/<int:drug_id>', methods=['POST'])
-@login_required
-def api_delete_drug(drug_id):
-    user = get_current_user_from_session()
-    db = get_db()
-    db.execute('DELETE FROM drugs WHERE id = ? AND user_id = ?', (drug_id, user['id']))
-    db.commit()
-    return jsonify({'success': True})
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? ORDER BY exchange_date DESC", (user_id,))
+    return jsonify({'exchanges': [dict(row) for row in cursor.fetchall()]})
 
 @app.route('/api/delete_drugs', methods=['POST'])
 @login_required
-def api_delete_drugs():
-    user = get_current_user_from_session()
-    data = request.json
+def delete_drugs():
     db = get_db()
-    placeholders = ','.join('?' * len(data['drug_ids']))
-    db.execute(f'DELETE FROM drugs WHERE id IN ({placeholders}) AND user_id = ?', data['drug_ids'] + [user['id']])
+    user_id = session['user_id']
+    data = request.get_json()
+    drug_ids = data.get('drug_ids', [])
+    if not drug_ids:
+        return jsonify({'success': False, 'error': 'هیچ دارویی انتخاب نشده است'})
+    placeholders = ','.join('?' for _ in drug_ids)
+    db.execute(f"DELETE FROM drugs WHERE id IN ({placeholders}) AND user_id = ?", (*drug_ids, user_id))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_current_user')
+@login_required
+def api_get_current_user():
+    user = get_current_user_from_session()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+    return jsonify({'id': user['id'], 'username': user['username'], 'is_full_user': user['is_full_user'], 'pharmacy_display_name': user['pharmacy_display_name']})
+
+@app.route('/api/search_with_stock')
+@login_required
+def search_with_stock():
+    q = request.args.get('q', '')
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT DISTINCT name FROM (SELECT name FROM inventory WHERE user_id = ? UNION SELECT name FROM drugs WHERE user_id = ?) WHERE name LIKE ? LIMIT 10", (user_id, user_id, f'%{q}%'))
+    names = [row['name'] for row in cursor.fetchall()]
+    result = []
+    for name in names:
+        cursor = db.execute("SELECT SUM(quantity) as total FROM inventory WHERE user_id = ? AND name = ? AND location = 'warehouse'", (user_id, name))
+        warehouse_qty = cursor.fetchone()['total'] or 0
+        cursor = db.execute("SELECT SUM(quantity) as total FROM inventory WHERE user_id = ? AND name = ? AND location = 'pharmacy'", (user_id, name))
+        pharmacy_qty = cursor.fetchone()['total'] or 0
+        cursor = db.execute("SELECT expiry_date FROM inventory WHERE user_id = ? AND name = ? AND expiry_date IS NOT NULL AND expiry_date != '' ORDER BY expiry_date ASC LIMIT 1", (user_id, name))
+        nearest = cursor.fetchone()
+        result.append({'name': name, 'warehouse_qty': warehouse_qty, 'pharmacy_qty': pharmacy_qty, 'nearest_expiry': nearest['expiry_date'] if nearest else '-'})
+    return jsonify(result)
+
+@app.route('/api/get_inventory_grouped_by_expiry')
+@login_required
+def get_inventory_grouped_by_expiry():
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT DISTINCT name FROM inventory WHERE user_id = ?", (user_id,))
+    names = [row['name'] for row in cursor.fetchall()]
+    result = []
+    for name in names:
+        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? ORDER BY expiry_date ASC", (user_id, name))
+        items = [dict(row) for row in cursor.fetchall()]
+        
+        warehouse_qty = sum(i['quantity'] for i in items if i['location'] == 'warehouse')
+        pharmacy_qty = sum(i['quantity'] for i in items if i['location'] == 'pharmacy')
+        
+        groups = {}
+        for item in items:
+            expiry = item['expiry_date'] or 'نامشخص'
+            if expiry not in groups:
+                groups[expiry] = []
+            groups[expiry].append(item)
+        
+        for expiry in groups:
+            groups[expiry].sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        group_list = []
+        for expiry, group_items in groups.items():
+            group_list.append({
+                'expiry_date': expiry,
+                'items': group_items
+            })
+        group_list.sort(key=lambda g: parse_expiry_number(g['expiry_date']))
+        
+        result.append({
+            'id': hash(name) % 1000000,
+            'name': name,
+            'warehouse_qty': warehouse_qty,
+            'pharmacy_qty': pharmacy_qty,
+            'total_qty': warehouse_qty + pharmacy_qty,
+            'groups': group_list
+        })
+    return jsonify({'drugs': result})
+
+@app.route('/api/add_drug', methods=['POST'])
+@login_required
+def add_drug():
+    db = get_db()
+    user_id = session['user_id']
+    name = request.form['name']
+    quantity = int(request.form['quantity'])
+    drug_type = request.form['type']
+    priority = int(request.form['priority'])
+    db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at, ordered) VALUES (?, ?, ?, ?, ?, ?, ?)',
+               (user_id, name, quantity, drug_type, priority, datetime.now().isoformat(), 0))
     db.commit()
     return jsonify({'success': True})
 
 @app.route('/api/get_drugs')
 @login_required
-def api_get_drugs():
-    user = get_current_user_from_session()
+def get_drugs():
     db = get_db()
-    drugs = db.execute('SELECT id, name, quantity, type FROM drugs WHERE user_id = ? AND ordered = 0', (user['id'],)).fetchall()
-    return jsonify({'drugs': [dict(row) for row in drugs]})
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM drugs WHERE user_id = ? AND ordered = 0 ORDER BY priority ASC, created_at DESC", (user_id,))
+    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
 
-@app.route('/api/get_orders')
+@app.route('/api/get_all_drugs')
 @login_required
-def api_get_orders():
-    user = get_current_user_from_session()
+def get_all_drugs():
     db = get_db()
-    orders = db.execute('SELECT * FROM orders WHERE user_id = ? ORDER BY ordered_at DESC', (user['id'],)).fetchall()
-    return jsonify({'orders': [dict(row) for row in orders]})
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM drugs WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
+    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
+
+@app.route('/api/delete_drug/<int:drug_id>', methods=['POST'])
+@login_required
+def delete_drug(drug_id):
+    db = get_db()
+    user_id = session['user_id']
+    db.execute("DELETE FROM drugs WHERE id = ? AND user_id = ?", (drug_id, user_id))
+    db.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/place_order', methods=['POST'])
 @login_required
-def api_place_order():
-    user = get_current_user_from_session()
-    data = request.json
+def place_order():
     db = get_db()
-    for drug_id in data['selected_ids']:
-        drug = db.execute('SELECT name, quantity FROM drugs WHERE id = ? AND user_id = ?', (drug_id, user['id'])).fetchone()
+    user_id = session['user_id']
+    req = request.get_json()
+    for drug_id in req.get('selected_ids', []):
+        cursor = db.execute("SELECT * FROM drugs WHERE id = ? AND user_id = ?", (drug_id, user_id))
+        drug = cursor.fetchone()
         if drug:
-            qty = data['quantities'].get(str(drug_id), drug['quantity'])
             db.execute('INSERT INTO orders (user_id, company, drug_name, quantity, ordered_at) VALUES (?, ?, ?, ?, ?)',
-                (user['id'], data['company'], drug['name'], qty, datetime.now().isoformat()))
-            db.execute('UPDATE drugs SET ordered = 1 WHERE id = ?', (drug_id,))
+                      (user_id, req.get('company'), drug['name'], int(req.get('quantities', {}).get(str(drug_id), drug['quantity'])), datetime.now().isoformat()))
+            if drug['type'] != 'quota':
+                db.execute("UPDATE drugs SET ordered = 1 WHERE id = ?", (drug_id,))
+            else:
+                db.execute("UPDATE drugs SET ordered = 0 WHERE id = ?", (drug_id,))
+    db.execute("DELETE FROM drugs WHERE ordered = 1 AND user_id = ? AND type != 'quota'", (user_id,))
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/api/search_with_stock')
-def api_search_with_stock():
-    query = request.args.get('q', '')
-    if len(query) < 2:
-        return jsonify([])
-    user = get_current_user_from_session()
+@app.route('/api/get_orders')
+@login_required
+def get_orders():
     db = get_db()
-    if user:
-        drugs = db.execute('''SELECT name, SUM(CASE WHEN location="warehouse" THEN quantity ELSE 0 END) as warehouse_qty,
-                              SUM(CASE WHEN location="pharmacy" THEN quantity ELSE 0 END) as pharmacy_qty
-                              FROM inventory WHERE user_id=? AND name LIKE ? AND quantity>0 GROUP BY name LIMIT 20''',
-                              (user['id'], f'%{query}%')).fetchall()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM orders WHERE user_id = ? ORDER BY ordered_at DESC", (user_id,))
+    return jsonify({'orders': [dict(row) for row in cursor.fetchall()]})
+
+@app.route('/api/add_inventory', methods=['POST'])
+@login_required
+def add_inventory():
+    db = get_db()
+    user_id = session['user_id']
+    name = request.form['name']
+    quantity = int(request.form['quantity'])
+    expiry_date = request.form.get('expiry_date', '').strip()
+    if expiry_date and not validate_expiry_date(expiry_date):
+        return jsonify({'success': False, 'error': 'فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.3)'})
+    location = request.form.get('location', 'warehouse')
+    supplier = request.form.get('supplier', '')
+    price_str = request.form.get('purchase_price', '0')
+    try:
+        purchase_price = float(price_str) if price_str and price_str.strip() else 0.0
+    except ValueError:
+        purchase_price = 0.0
+    cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ? LIMIT 1", (user_id, name, expiry_date, location))
+    existing = cursor.fetchone()
+    if existing:
+        new_quantity = existing['quantity'] + quantity
+        db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_quantity, existing['id']))
     else:
-        drugs = db.execute('SELECT DISTINCT name, 0 as warehouse_qty, 0 as pharmacy_qty FROM inventory WHERE name LIKE ? LIMIT 20', (f'%{query}%',)).fetchall()
-    return jsonify([dict(row) for row in drugs])
-
-# APIهای چت
-@app.route('/api/get_conversations')
-@login_required
-def api_get_conversations():
-    user = get_current_user_from_session()
-    db = get_db()
-    convs = db.execute('''SELECT DISTINCT CASE WHEN sender_id=? THEN receiver_id ELSE sender_id END as partner_id,
-                          u.pharmacy_display_name as partner_name,
-                          (SELECT message FROM chats WHERE (sender_id=? AND receiver_id=u.id) OR (sender_id=u.id AND receiver_id=?) ORDER BY created_at DESC LIMIT 1) as last_message,
-                          (SELECT created_at FROM chats WHERE (sender_id=? AND receiver_id=u.id) OR (sender_id=u.id AND receiver_id=?) ORDER BY created_at DESC LIMIT 1) as last_time
-                          FROM chats c JOIN users u ON (u.id=c.sender_id OR u.id=c.receiver_id)
-                          WHERE (c.sender_id=? OR c.receiver_id=?) AND u.id!=? GROUP BY partner_id ORDER BY last_time DESC''',
-                          (user['id'], user['id'], user['id'], user['id'], user['id'], user['id'], user['id'], user['id'])).fetchall()
-    return jsonify({'conversations': [dict(c) for c in convs]})
-
-@app.route('/api/get_chat_messages/<int:partner_id>')
-@login_required
-def api_get_chat_messages(partner_id):
-    user = get_current_user_from_session()
-    db = get_db()
-    msgs = db.execute('SELECT * FROM chats WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at ASC',
-        (user['id'], partner_id, partner_id, user['id'])).fetchall()
-    result = []
-    for m in msgs:
-        msg = dict(m)
-        if msg['file_url']:
-            msg['file_url'] = f"/uploads/chat/{msg['file_url'].split('/')[-1]}"
-        result.append(msg)
-    return jsonify({'messages': result})
-
-@app.route('/api/send_message', methods=['POST'])
-@login_required
-def api_send_message():
-    user = get_current_user_from_session()
-    receiver_id = request.form.get('receiver_id')
-    message = request.form.get('message', '')
-    image = request.files.get('image')
-    file_url, msg_type = None, 'text'
-    if image and allowed_file(image.filename):
-        filename = f"{datetime.now().timestamp()}_{user['id']}_{receiver_id}_{secure_filename(image.filename)}"
-        image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        file_url = f"/uploads/chat/{filename}"
-        msg_type = 'image'
-        message = message or '📷 تصویر'
-    db = get_db()
-    db.execute('INSERT INTO chats (sender_id, receiver_id, message, message_type, file_url, created_at, is_read) VALUES (?, ?, ?, ?, ?, ?, 0)',
-        (user['id'], receiver_id, message, msg_type, file_url, datetime.now().isoformat()))
+        db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at, supplier, purchase_price)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (user_id, name, quantity, expiry_date, location, datetime.now().isoformat(), supplier, purchase_price))
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/api/send_voice', methods=['POST'])
+@app.route('/api/move_inventory', methods=['POST'])
 @login_required
-def api_send_voice():
-    user = get_current_user_from_session()
-    receiver_id = request.form.get('receiver_id')
-    voice = request.files.get('voice')
-    filename = f"{datetime.now().timestamp()}_{user['id']}_{receiver_id}_voice.webm"
-    voice.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+def move_inventory():
     db = get_db()
-    db.execute('INSERT INTO chats (sender_id, receiver_id, message, message_type, file_url, created_at, is_read) VALUES (?, ?, ?, ?, ?, ?, 0)',
-        (user['id'], receiver_id, 'پیام صوتی', 'voice', f"/uploads/chat/{filename}", datetime.now().isoformat()))
+    user_id = session['user_id']
+    req = request.get_json()
+    name = req.get('name')
+    quantity = req.get('quantity')
+    from_location = req.get('from_location')
+    to_location = req.get('to_location')
+    expiry_date = req.get('expiry_date', '').strip()
+    if not expiry_date:
+        return jsonify({'success': False, 'error': 'تاریخ انقضا اجباری است'})
+    if not validate_expiry_date(expiry_date):
+        return jsonify({'success': False, 'error': 'فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'})
+    cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, name, from_location, expiry_date))
+    sources = cursor.fetchall()
+    total_available = sum(s['quantity'] for s in sources)
+    if total_available < quantity:
+        return jsonify({'success': False, 'error': f'موجودی ناکافی. فقط {total_available} عدد موجود است'})
+    remaining = quantity
+    for source in sources:
+        if remaining <= 0:
+            break
+        take = min(source['quantity'], remaining)
+        if take > 0:
+            db.execute("UPDATE inventory SET quantity = quantity - ? WHERE id = ?", (take, source['id']))
+            if source['quantity'] - take == 0:
+                db.execute("DELETE FROM inventory WHERE id = ?", (source['id'],))
+            cursor = db.execute("SELECT id FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ? LIMIT 1", (user_id, name, expiry_date, to_location))
+            dest = cursor.fetchone()
+            if dest:
+                db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (take, dest['id']))
+            else:
+                db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at, supplier, purchase_price)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                           (user_id, name, take, expiry_date, to_location, datetime.now().isoformat(), source['supplier'], source['purchase_price']))
+            remaining -= take
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/uploads/chat/<filename>')
-def uploaded_file(filename):
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+@app.route('/api/delete_inventory/<int:item_id>', methods=['POST'])
+@login_required
+def delete_inventory(item_id):
+    db = get_db()
+    user_id = session['user_id']
+    db.execute("DELETE FROM inventory WHERE id = ? AND user_id = ?", (item_id, user_id))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/register_sale', methods=['POST'])
+@login_required
+def register_sale():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    drug_name = data.get('drug_name')
+    quantity = data.get('quantity')
+    expiry_date = data.get('expiry_date')
+    sale_date = data.get('sale_date')
+    customer_name = data.get('customer_name', '')
+    price = data.get('price', 0)
+    location = data.get('location', 'pharmacy')
+    if not drug_name or not quantity or not expiry_date:
+        return jsonify({'success': False, 'error': 'نام دارو، تعداد و تاریخ انقضا اجباری است'})
+    if not validate_expiry_date(expiry_date):
+        return jsonify({'success': False, 'error': 'فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'})
+    cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, drug_name, location, expiry_date))
+    items = cursor.fetchall()
+    total_available = sum(i['quantity'] for i in items)
+    if total_available < quantity:
+        return jsonify({'success': False, 'error': f'موجودی دارو کافی نیست. فقط {total_available} عدد موجود است'})
+    remaining = quantity
+    for item in items:
+        if remaining <= 0:
+            break
+        take = min(item['quantity'], remaining)
+        if take > 0:
+            db.execute("UPDATE inventory SET quantity = quantity - ? WHERE id = ?", (take, item['id']))
+            if item['quantity'] - take == 0:
+                db.execute("DELETE FROM inventory WHERE id = ?", (item['id'],))
+            remaining -= take
+    db.execute('''INSERT INTO sales (user_id, drug_name, quantity, sale_date, expiry_date, customer_name, price, location, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               (user_id, drug_name, quantity, sale_date if sale_date else None, expiry_date, customer_name, price, location, datetime.now().isoformat()))
+    db.commit()
+    return jsonify({'success': True})
 
 if __name__ == '__main__':
+    print("=" * 50)
+    print("✅ داروخانه با موفقیت راه اندازی شد")
+    print("=" * 50)
+    print("🌐 آدرس: http://0.0.0.0:5000")
+    print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
 EOF
