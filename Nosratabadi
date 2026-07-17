@@ -4,7 +4,7 @@ import sqlite3
 import hashlib
 import json
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory
+from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory, render_template_string
 from functools import wraps
 import os
 import base64
@@ -249,6 +249,40 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
+    # ===== جداول جدید برای پنل ادمین =====
+    
+    # جدول مصاحبه با داروسازان
+    db.execute('''CREATE TABLE IF NOT EXISTS interviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pharmacist_name TEXT NOT NULL,
+        pharmacy_name TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        image_url TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        is_published INTEGER DEFAULT 1,
+        views INTEGER DEFAULT 0
+    )''')
+    
+    # جدول پیام‌های ادمین (اطلاعیه‌ها)
+    db.execute('''CREATE TABLE IF NOT EXISTS announcements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1
+    )''')
+    
+    # جدول لاگ فعالیت‌ها
+    db.execute('''CREATE TABLE IF NOT EXISTS activity_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        action TEXT NOT NULL,
+        details TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+    
     try:
         db.execute("ALTER TABLE inventory ADD COLUMN category TEXT DEFAULT 'other'")
     except sqlite3.OperationalError:
@@ -282,6 +316,12 @@ def init_db():
     companies = ['داروپخش', 'البرز', 'اکسیر', 'رازی']
     for c in companies:
         db.execute("INSERT OR IGNORE INTO companies (name) VALUES (?)", (c,))
+    
+    # ایجاد کاربر ادمین
+    cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'admin'")
+    if cursor.fetchone()['count'] == 0:
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   ('admin', hash_password('admin123'), 1, 'مدیر سیستم', datetime.now().isoformat()))
     
     cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = 'nosratabadi'")
     if cursor.fetchone()['count'] == 0:
@@ -333,6 +373,21 @@ def init_db():
             if cursor.fetchone()['count'] == 0:
                 db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, ''))
     
+    # ایجاد مصاحبه نمونه
+    cursor = db.execute("SELECT COUNT(*) as count FROM interviews")
+    if cursor.fetchone()['count'] == 0:
+        db.execute('''INSERT INTO interviews (pharmacist_name, pharmacy_name, title, content, created_at, is_published)
+                      VALUES (?, ?, ?, ?, ?, ?)''',
+                   ('دکتر محمد رضایی', 'داروخانه مرکزی', 'نقش داروساز در جامعه مدرن',
+                    'داروسازان امروز فراتر از یک توزیع‌کننده دارو هستند. آنها نقش مهمی در مشاوره به بیماران، مدیریت درمان و بهبود سلامت جامعه دارند. در این مصاحبه با دکتر رضایی درباره چالش‌ها و فرصت‌های حرفه داروسازی گفتگو کرده‌ایم.',
+                    datetime.now().isoformat(), 1))
+        
+        db.execute('''INSERT INTO interviews (pharmacist_name, pharmacy_name, title, content, created_at, is_published)
+                      VALUES (?, ?, ?, ?, ?, ?)''',
+                   ('دکتر سارا کریمی', 'داروخانه سلامت', 'چالش‌های مدیریت داروخانه در دوران کرونا',
+                    'دوران کرونا یکی از سخت‌ترین دوره‌ها برای داروخانه‌ها بود. دکتر کریمی از تجربیات خود در مدیریت بحران، تامین داروهای مورد نیاز و حفظ سلامت پرسنل می‌گوید.',
+                    datetime.now().isoformat(), 1))
+    
     db.commit()
 
 with app.app_context():
@@ -346,217 +401,358 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        if session.get('username') != 'admin':
+            return "⛔ دسترسی غیرمجاز. فقط ادمین می‌تواند وارد این بخش شود.", 403
+        return f(*args, **kwargs)
+    return decorated
+
+# ==================== HTML قالب اصلی ====================
+
 HTML = '''<!DOCTYPE html>
 <html dir="rtl" lang="fa">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>داروخانه</title>
+    <title>{% block title %}داروخانه{% endblock %}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Tahoma', 'Segoe UI', sans-serif; background: #f5f5f5; color: #1a1a1a; }
-        .sidebar { position: fixed; right: 0; top: 0; width: 260px; height: 100%; background: #1a1a1a; color: white; z-index: 1000; overflow-y: auto; }
-        .sidebar-header { padding: 20px 15px; text-align: center; border-bottom: 1px solid #333; }
-        .sidebar-header h2 { color: white; font-size: 20px; }
-        .sidebar-header .pharmacy-name { font-size: 12px; color: #aaa; margin-top: 5px; }
-        .sidebar-menu { list-style: none; padding: 15px 0; }
+        
+        /* ===== نوار بالای ثابت با ورود/ثبت‌نام ===== */
+        .topbar {
+            background: #1a1a1a;
+            color: white;
+            padding: 8px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 9999;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .topbar .brand {
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            text-decoration: none;
+        }
+        .topbar .brand span { color: #4fc3f7; }
+        .topbar .nav-links {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .topbar .nav-links a {
+            color: #e0e0e0;
+            text-decoration: none;
+            font-size: 13px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        .topbar .nav-links a:hover { background: #333; color: white; }
+        .topbar .nav-links a.active { background: #333; color: white; }
+        .topbar .nav-links .btn-login {
+            background: #4fc3f7;
+            color: #1a1a1a;
+            padding: 4px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        .topbar .nav-links .btn-login:hover { background: #81d4fa; }
+        .topbar .nav-links .btn-register {
+            background: #28a745;
+            color: white;
+            padding: 4px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        .topbar .nav-links .btn-register:hover { background: #34ce57; }
+        .topbar .nav-links .btn-logout {
+            background: #dc3545;
+            color: white;
+            padding: 4px 14px;
+            border-radius: 6px;
+        }
+        .topbar .nav-links .btn-logout:hover { background: #e74c5e; }
+        .topbar .user-badge {
+            background: #333;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #aaa;
+        }
+        .topbar .user-badge strong { color: white; }
+        
+        .sidebar {
+            position: fixed;
+            right: 0;
+            top: 52px;
+            width: 220px;
+            height: calc(100% - 52px);
+            background: #1a1a1a;
+            color: white;
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        .sidebar-menu { list-style: none; padding: 10px 0; }
         .sidebar-menu li { margin-bottom: 2px; }
-        .sidebar-menu a { display: flex; align-items: center; gap: 12px; padding: 12px 20px; color: #e0e0e0; text-decoration: none; transition: all 0.3s; font-size: 14px; }
+        .sidebar-menu a {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 18px;
+            color: #e0e0e0;
+            text-decoration: none;
+            transition: all 0.3s;
+            font-size: 13px;
+        }
         .sidebar-menu a:hover { background: #333; color: white; }
-        .sidebar-menu a.active { background: #2c2c2c; border-right: 3px solid #666; }
-        .main-content { margin-right: 260px; padding: 20px; min-height: 100vh; }
-        .header { background: white; border-radius: 12px; padding: 12px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .page-title { font-size: 18px; font-weight: 600; }
-        .user-info { display: flex; gap: 15px; align-items: center; }
-        .logout-btn { background: #dc3545; color: white; padding: 6px 16px; border-radius: 8px; text-decoration: none; font-size: 13px; }
-        .card { background: white; border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e0e0e0; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: white; padding: 12px; border-radius: 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .stat-card .number { font-size: 24px; font-weight: bold; }
-        .stat-card .label { color: #666; font-size: 12px; margin-top: 5px; }
-        .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-        .form-row input, .form-row select { flex: 1; min-width: 130px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }
-        button { background: #1a1a1a; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; }
-        .btn-danger { background: #dc3545; }
-        .btn-sm { padding: 4px 10px; font-size: 11px; }
-        .btn-success { background: #28a745; }
-        .btn-warning { background: #ffc107; color: #1a1a1a; }
-        .search-container { position: relative; flex: 1; }
-        .suggestions-list { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-radius: 8px; max-height: 250px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        .suggestions-list div { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; }
-        .suggestions-list div:hover { background: #f0f0f0; }
-        .suggestions-list .stock-info { font-size: 11px; color: #666; margin-top: 4px; }
+        .sidebar-menu a.active { background: #2c2c2c; border-right: 3px solid #4fc3f7; }
+        .sidebar-menu .admin-link { border-right: 3px solid #ffc107; }
+        .sidebar-menu .admin-link:hover { background: #2c2c2c; }
         
-        .expiry-tab { border: 1px solid #e0e0e0; border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
-        .expiry-tab-header { padding: 14px 18px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        .expiry-tab-header .expiry-date { font-size: 16px; }
-        .expiry-tab-header .expiry-status { font-size: 12px; padding: 2px 10px; border-radius: 20px; }
-        .expiry-tab-body { display: none; padding: 10px 15px; background: #fafafa; }
-        .expiry-tab-body.show { display: block; }
-        
-        .pharmacy-group { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
-        .pharmacy-group-header { background: #f0f0f0; padding: 10px 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-weight: bold; }
-        .pharmacy-group-header:hover { background: #e8e8e8; }
-        .pharmacy-group-body { display: none; padding: 8px 12px; background: white; }
-        .pharmacy-group-body.show { display: block; }
-        
-        .drug-item { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
-        .drug-item:last-child { border-bottom: none; }
-        .drug-item .drug-name { font-weight: bold; flex: 1; min-width: 100px; }
-        .drug-item .drug-qty { color: #555; }
-        .drug-item .drug-location { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
-        .drug-item.hidden-drug { opacity: 0.3; background: #e9ecef; }
-        .drug-item .item-checkbox { cursor: pointer; }
-        
-        .expiry-tab-header .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
-        .expired { background: #f8d7da; }
-        .expiring-soon { background: #fff3cd; }
-        .good-expiry { background: #d4edda; }
-        .location-warehouse { background: #cfe2ff; color: #084298; }
-        .location-pharmacy { background: #d1e7dd; color: #0a3622; }
-        
-        .inventory-wrapper { overflow-x: visible; }
-        
-        .exchanges-wrapper { overflow-x: visible; }
-        .exchange-card { background: white; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; border: 1px solid #e0e0e0; }
-        .exchange-card-header { background: #1a1a1a; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        .exchange-card-header h4 { margin: 0; font-size: 14px; }
-        .exchange-card-header .date { font-size: 11px; opacity: 0.8; }
-        .exchange-card-body { padding: 12px 16px; }
-        .exchange-section { margin-bottom: 15px; }
-        .exchange-section-title { font-weight: bold; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
-        .exchange-drug-list { list-style: none; padding: 0; }
-        .exchange-drug-list li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; font-size: 12px; }
-        .exchange-card-footer { padding: 10px 16px; background: #f8f9fa; display: flex; gap: 10px; justify-content: flex-end; border-top: 1px solid #e0e0e0; }
-        .exchange-filter { margin-bottom: 15px; }
-        
-        .badge { display: inline-block; padding: 2px 6px; border-radius: 12px; font-size: 10px; margin-right: 5px; }
-        .status-pending { background: #ffc107; color: #1a1a1a; }
-        .status-confirmed { background: #28a745; color: white; }
-        
-        .exchange-dual-container { display: flex; gap: 20px; flex-wrap: wrap; }
-        .exchange-list-box { flex: 1; min-width: 280px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .exchange-list-header { background: #1a1a1a; color: white; padding: 12px; text-align: center; font-weight: bold; }
-        .exchange-list-header.active { background: #28a745; }
-        .exchange-list-items { max-height: 400px; overflow-y: auto; padding: 5px; }
-        .exchange-drug-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; border-radius: 6px; }
-        .exchange-drug-item:hover { background: #f5f5f5; }
-        .exchange-drug-item.selected { background: #d4edda; }
-        .exchange-drug-check { width: 18px; height: 18px; cursor: pointer; }
-        .exchange-drug-info { flex: 1; }
-        .exchange-drug-name { font-weight: bold; font-size: 13px; }
-        .exchange-drug-detail { font-size: 11px; color: #666; }
-        .exchange-qty-input { width: 65px; padding: 3px 5px; border: 1px solid #ddd; border-radius: 6px; text-align: center; }
-        .exchange-switch-btn { background: #1a1a1a; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; margin: 10px; }
-        .exchange-summary { background: #f8f9fa; padding: 15px; border-radius: 12px; margin-top: 15px; }
-        .hide-btn { background: #6c757d; padding: 2px 8px; font-size: 11px; margin-right: 5px; }
-        .exchange-tab { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
-        .exchange-tab button { background: none; color: #1a1a1a; border: none; padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 0; }
-        .exchange-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .dashboard-tab { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
-        .dashboard-tab button { background: none; color: #1a1a1a; border: none; padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 0; }
-        .dashboard-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
-        .drugs-columns { display: flex; gap: 20px; flex-wrap: wrap; }
-        .drugs-column { flex: 1; min-width: 250px; background: #fafafa; border-radius: 12px; padding: 12px; }
-        .drugs-column h4 { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #ddd; }
-        .category-checkboxes { display: flex; flex-wrap: wrap; gap: 12px; margin: 15px 0; padding: 15px; background: #f8f9fa; border-radius: 12px; }
-        .category-checkboxes label { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 10px; background: white; border-radius: 20px; border: 1px solid #ddd; }
-        
-        .deficit-table { width: 100%; border-collapse: collapse; }
-        .deficit-table th, .deficit-table td { padding: 10px; text-align: center; border-bottom: 1px solid #eee; }
-        .deficit-table th { background: #f0f0f0; font-weight: bold; }
-        .deficit-table tr:hover { background: #f9f9f9; }
-        
-        .pharmacy-drug-list { display: flex; flex-direction: column; gap: 5px; padding: 5px 0; }
-        .pharmacy-drug-item { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #f8f9fa; border-radius: 6px; border: 1px solid #eee; flex-wrap: wrap; }
-        .pharmacy-drug-item:hover { background: #e9ecef; }
-        .pharmacy-drug-name { font-weight: bold; flex: 1; min-width: 80px; }
-        
-        .btn-exchange-select { background: #28a745; color: white; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
-        .btn-exchange-select:hover { background: #218838; }
-        .btn-exchange-select.selected { background: #6c757d; }
-        
-        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px; align-items: center; }
-        .toolbar button { font-size: 12px; padding: 6px 14px; }
-        
-        .selected-drug { background: #e3f2fd !important; border: 2px solid #2196f3 !important; }
-        
-        /* ===== استایل انتخاب تاریخ انقضا ===== */
-        .expiry-picker { background: #f8f9fa; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; }
-        .year-selector { display: flex; gap: 10px; margin-bottom: 12px; }
-        .year-btn { padding: 8px 20px; border: 2px solid #ddd; border-radius: 8px; background: white; cursor: pointer; font-weight: bold; font-size: 14px; transition: all 0.3s; }
-        .year-btn:hover { border-color: #999; }
-        .year-btn.active { border-color: #1a1a1a; background: #1a1a1a; color: white; }
-        .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-        .month-btn { padding: 10px 5px; border: 1px solid #ddd; border-radius: 8px; background: white; cursor: pointer; font-size: 12px; text-align: center; transition: all 0.3s; }
-        .month-btn:hover { background: #f0f0f0; border-color: #999; }
-        .month-btn .month-name { font-weight: bold; font-size: 13px; }
-        .month-btn .month-num { font-size: 10px; color: #999; }
-        .month-btn.selected { background: #1a1a1a; color: white; border-color: #1a1a1a; }
-        .month-btn.selected .month-num { color: #aaa; }
-        .selected-date-display { margin-top: 12px; padding: 10px; background: #e8f5e9; border-radius: 8px; text-align: center; font-weight: bold; color: #2e7d32; }
-        
-        @media (max-width: 768px) {
-            .sidebar { width: 65px; }
-            .sidebar .menu-text { display: none; }
-            .sidebar-header .pharmacy-name { display: none; }
-            .main-content { margin-right: 65px; padding: 12px; }
-            .exchange-dual-container { flex-direction: column; }
-            .expiry-tab-header { font-size: 13px; padding: 10px 12px; }
-            .drug-item { font-size: 12px; gap: 6px; }
-            .month-grid { grid-template-columns: repeat(3, 1fr); }
+        .main-content {
+            margin-right: 220px;
+            margin-top: 52px;
+            padding: 20px;
+            min-height: calc(100vh - 52px);
         }
         
-        .export-btn { background: #17a2b8; margin-right: 10px; }
-        .error-text { color: #dc3545; font-size: 12px; margin-top: 5px; display: none; }
-        .hidden-checkbox { margin-left: 5px; }
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 12px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .page-title { font-size: 18px; font-weight: 600; }
+        .user-info { display: flex; gap: 15px; align-items: center; font-size: 13px; }
         
-        /* استایل تبادلات دریافتی */
-        .exchange-source-badge { background: #17a2b8; color: white; padding: 2px 10px; border-radius: 20px; font-size: 11px; }
-        .exchange-target-badge { background: #28a745; color: white; padding: 2px 10px; border-radius: 20px; font-size: 11px; }
-        .exchange-status-pending { background: #ffc107; color: #1a1a1a; padding: 2px 10px; border-radius: 20px; font-size: 11px; }
-        .exchange-status-confirmed { background: #28a745; color: white; padding: 2px 10px; border-radius: 20px; font-size: 11px; }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 18px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 12px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .stat-card .number { font-size: 24px; font-weight: bold; }
+        .stat-card .label { color: #666; font-size: 12px; margin-top: 5px; }
+        
+        .form-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+            align-items: center;
+        }
+        .form-row input, .form-row select, .form-row textarea {
+            flex: 1;
+            min-width: 130px;
+            padding: 8px 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .form-row textarea { min-height: 80px; resize: vertical; }
+        
+        button {
+            background: #1a1a1a;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-danger { background: #dc3545; }
+        .btn-success { background: #28a745; }
+        .btn-warning { background: #ffc107; color: #1a1a1a; }
+        .btn-primary { background: #007bff; }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        
+        .table-responsive { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        table th, table td {
+            padding: 10px 12px;
+            text-align: center;
+            border-bottom: 1px solid #eee;
+        }
+        table th { background: #f0f0f0; font-weight: bold; }
+        table tr:hover { background: #f9f9f9; }
+        
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+        }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        
+        .interview-card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 15px;
+            border: 1px solid #e0e0e0;
+        }
+        .interview-card h3 { margin-bottom: 8px; color: #1a1a1a; }
+        .interview-card .meta {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .interview-card .content { font-size: 14px; line-height: 1.8; }
+        
+        @media (max-width: 768px) {
+            .sidebar { width: 60px; }
+            .sidebar .menu-text { display: none; }
+            .main-content { margin-right: 60px; padding: 12px; }
+            .topbar .brand { font-size: 14px; }
+            .topbar .nav-links a { font-size: 11px; padding: 3px 8px; }
+        }
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <div class="sidebar-header">
-            <h2>📋 داروخانه</h2>
-            <div class="pharmacy-name" id="pharmacyDisplayName"></div>
+    <!-- ===== نوار بالای ثابت ===== -->
+    <div class="topbar">
+        <a href="/" class="brand">💊 <span>دارو</span>خانه</a>
+        <div class="nav-links">
+            <a href="/">🏠 صفحه اصلی</a>
+            {% if session.logged_in %}
+                <a href="/dashboard">📊 داشبورد</a>
+                <a href="/inventory">📦 انبارداری</a>
+                <a href="/exchange">🔄 تبادل</a>
+                <a href="/deficit">📋 کسری</a>
+                {% if session.username == 'admin' %}
+                    <a href="/admin" class="active" style="color:#ffc107;">👑 ادمین</a>
+                {% endif %}
+                <span class="user-badge">👤 <strong>{{ session.pharmacy_display_name or session.username }}</strong></span>
+                <a href="/logout" class="btn-logout">🚪 خروج</a>
+            {% else %}
+                <a href="/login" class="btn-login">🔐 ورود</a>
+                <a href="/register" class="btn-register">📝 ثبت‌نام</a>
+            {% endif %}
         </div>
+    </div>
+    
+    <!-- ===== سایدبار ===== -->
+    <div class="sidebar">
         <ul class="sidebar-menu">
-            <li><a href="/"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
-            <li><a href="/inventory"><span>📦</span> <span class="menu-text">انبارداری</span></a></li>
-            <li><a href="/exchange"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
-            <li><a href="/deficit"><span>📋</span> <span class="menu-text">دفتر کسری</span></a></li>
+            <li><a href="/"><span>🏠</span> <span class="menu-text">صفحه اصلی</span></a></li>
+            {% if session.logged_in %}
+                <li><a href="/dashboard"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
+                <li><a href="/inventory"><span>📦</span> <span class="menu-text">انبارداری</span></a></li>
+                <li><a href="/exchange"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
+                <li><a href="/deficit"><span>📋</span> <span class="menu-text">دفتر کسری</span></a></li>
+                {% if session.username == 'admin' %}
+                    <li><a href="/admin" class="admin-link"><span>👑</span> <span class="menu-text">پنل ادمین</span></a></li>
+                {% endif %}
+            {% endif %}
         </ul>
     </div>
+    
+    <!-- ===== محتوای اصلی ===== -->
     <div class="main-content">
         <div class="header">
-            <div class="page-title" id="pageTitle"></div>
+            <div class="page-title">{% block page_title %}صفحه اصلی{% endblock %}</div>
             <div class="user-info">
-                <span id="userInfo"></span>
-                <a href="/logout" class="logout-btn">🚪 خروج</a>
+                {% if session.logged_in %}
+                    <span>👤 {{ session.pharmacy_display_name or session.username }}</span>
+                {% else %}
+                    <span>👤 مهمان</span>
+                {% endif %}
             </div>
         </div>
-        <div id="dynamicContent"></div>
+        {% block content %}{% endblock %}
     </div>
-    <script>
-        function loadUserInfo() {
-            fetch('/api/get_current_user').then(r=>r.json()).then(data=>{
-                document.getElementById('pharmacyDisplayName').innerText = data.pharmacy_display_name;
-                document.getElementById('userInfo').innerHTML = '👤 ' + data.username + ' | ' + data.pharmacy_display_name;
-                sessionStorage.setItem('userId', data.id);
-                sessionStorage.setItem('pharmacyId', data.id);
-            }).catch(err=>console.error('Error loading user:', err));
-        }
-        loadUserInfo();
-    </script>
 </body>
 </html>'''
+
+# ==================== روت‌های عمومی ====================
+
+@app.route('/')
+def index():
+    db = get_db()
+    interviews = db.execute("SELECT * FROM interviews WHERE is_published = 1 ORDER BY created_at DESC").fetchall()
+    announcements = db.execute("SELECT * FROM announcements WHERE is_active = 1 ORDER BY created_at DESC LIMIT 3").fetchall()
+    
+    content = '''
+    <!-- ===== بخش مصاحبه‌ها ===== -->
+    <div class="card">
+        <div class="card-title">🎙️ مصاحبه با داروسازان</div>
+        {% if interviews %}
+            {% for interview in interviews %}
+                <div class="interview-card">
+                    <h3>{{ interview.title }}</h3>
+                    <div class="meta">
+                        👤 {{ interview.pharmacist_name }} | 🏥 {{ interview.pharmacy_name }}
+                        | 📅 {{ interview.created_at[:10] }}
+                    </div>
+                    <div class="content">{{ interview.content }}</div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p style="text-align:center;padding:30px;color:#999;">هنوز مصاحبه‌ای ثبت نشده است</p>
+        {% endif %}
+    </div>
+    
+    <!-- ===== بخش اطلاعیه‌ها ===== -->
+    {% if announcements %}
+        <div class="card" style="background:#e3f2fd;border:1px solid #90caf9;">
+            <div class="card-title">📢 اطلاعیه‌ها</div>
+            {% for ann in announcements %}
+                <div style="padding:10px 0;border-bottom:1px solid #e0e0e0;">
+                    <strong>{{ ann.title }}</strong>
+                    <p style="font-size:13px;color:#555;margin-top:5px;">{{ ann.content }}</p>
+                    <span style="font-size:11px;color:#999;">{{ ann.created_at[:10] }}</span>
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+    '''
+    return render_template_string(HTML, content=content, interviews=interviews, announcements=announcements, session=session)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -573,18 +769,19 @@ def login():
             session['username'] = user['username']
             session['is_full_user'] = user['is_full_user']
             session['pharmacy_display_name'] = user['pharmacy_display_name']
-            return redirect(url_for('dashboard'))
+            return redirect(url_for('index'))
         return '''
         <!DOCTYPE html>
         <html dir="rtl" lang="fa">
         <head><meta charset="UTF-8"><title>ورود</title>
         <style>
             body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+            .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
             .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
             .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
             .login-box button { width: 100%; padding: 10px; background: #1a1a1a; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
             .error { color: #dc3545; margin-top: 10px; font-size: 13px; }
+            .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
         </style>
         </head>
         <body>
@@ -595,7 +792,8 @@ def login():
                 <input type="password" name="password" placeholder="رمز عبور" required>
                 <button type="submit">ورود</button>
             </form>
-            <div class="error">نام کاربری یا رمز عبور اشتباه است</div>
+            <div class="error">❌ نام کاربری یا رمز عبور اشتباه است</div>
+            <a href="/" class="back-link">← بازگشت به صفحه اصلی</a>
         </div>
         </body>
         </html>
@@ -606,10 +804,11 @@ def login():
     <head><meta charset="UTF-8"><title>ورود</title>
     <style>
         body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+        .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
         .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
         .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
         .login-box button { width: 100%; padding: 10px; background: #1a1a1a; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+        .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
     </style>
     </head>
     <body>
@@ -620,6 +819,116 @@ def login():
             <input type="password" name="password" placeholder="رمز عبور" required>
             <button type="submit">ورود</button>
         </form>
+        <a href="/" class="back-link">← بازگشت به صفحه اصلی</a>
+    </div>
+    </body>
+    </html>
+    '''
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        pharmacy_name = request.form.get('pharmacy_name')
+        
+        if not username or not password or not pharmacy_name:
+            return '''
+            <!DOCTYPE html>
+            <html dir="rtl" lang="fa">
+            <head><meta charset="UTF-8"><title>ثبت‌نام</title>
+            <style>
+                body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                .register-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+                .register-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+                .register-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+                .register-box button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+                .error { color: #dc3545; margin-top: 10px; font-size: 13px; }
+                .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+            </style>
+            </head>
+            <body>
+            <div class="register-box">
+                <h2>📝 ثبت‌نام</h2>
+                <div class="error">❌ همه فیلدها اجباری هستند</div>
+                <a href="/register" class="back-link">← بازگشت</a>
+            </div>
+            </body>
+            </html>
+            '''
+        
+        db = get_db()
+        cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE username = ?", (username,))
+        if cursor.fetchone()['count'] > 0:
+            return '''
+            <!DOCTYPE html>
+            <html dir="rtl" lang="fa">
+            <head><meta charset="UTF-8"><title>ثبت‌نام</title>
+            <style>
+                body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                .register-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+                .register-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+                .error { color: #dc3545; margin-top: 10px; font-size: 13px; }
+                .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+            </style>
+            </head>
+            <body>
+            <div class="register-box">
+                <h2>📝 ثبت‌نام</h2>
+                <div class="error">❌ این نام کاربری قبلاً ثبت شده است</div>
+                <a href="/register" class="back-link">← بازگشت</a>
+            </div>
+            </body>
+            </html>
+            '''
+        
+        db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                   (username, hash_password(password), 0, pharmacy_name, datetime.now().isoformat()))
+        db.commit()
+        return '''
+        <!DOCTYPE html>
+        <html dir="rtl" lang="fa">
+        <head><meta charset="UTF-8"><title>ثبت‌نام</title>
+        <style>
+            body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .success-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+            .success-box h2 { color: #28a745; margin-bottom: 15px; }
+            .success-box .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+        </style>
+        </head>
+        <body>
+        <div class="success-box">
+            <h2>✅ ثبت‌نام با موفقیت انجام شد</h2>
+            <p>اکنون می‌توانید با نام کاربری خود وارد شوید</p>
+            <a href="/login" class="back-link">🔐 ورود به سیستم →</a>
+        </div>
+        </body>
+        </html>
+        '''
+    
+    return '''
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head><meta charset="UTF-8"><title>ثبت‌نام</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .register-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+        .register-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+        .register-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        .register-box button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+        .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+    </style>
+    </head>
+    <body>
+    <div class="register-box">
+        <h2>📝 ثبت‌نام</h2>
+        <form method="post">
+            <input type="text" name="username" placeholder="نام کاربری" required>
+            <input type="password" name="password" placeholder="رمز عبور" required>
+            <input type="text" name="pharmacy_name" placeholder="نام داروخانه" required>
+            <button type="submit">ثبت‌نام</button>
+        </form>
+        <a href="/login" class="back-link">← قبلاً ثبت‌نام کرده‌اید؟ ورود</a>
     </div>
     </body>
     </html>
@@ -628,11 +937,360 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('login'))
+    return redirect(url_for('index'))
 
-@app.route('/')
+# ==================== پنل ادمین ====================
+
+@app.route('/admin')
+@admin_required
+def admin_panel():
+    db = get_db()
+    
+    # آمار کلی
+    total_users = db.execute("SELECT COUNT(*) as count FROM users").fetchone()['count']
+    total_drugs = db.execute("SELECT COUNT(*) as count FROM drugs").fetchone()['count']
+    total_inventory = db.execute("SELECT SUM(quantity) as total FROM inventory").fetchone()['total'] or 0
+    total_orders = db.execute("SELECT COUNT(*) as count FROM orders").fetchone()['count']
+    total_exchanges = db.execute("SELECT COUNT(*) as count FROM exchanges").fetchone()['count']
+    
+    # لیست کاربران
+    users = db.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    
+    # لیست مصاحبه‌ها
+    interviews = db.execute("SELECT * FROM interviews ORDER BY created_at DESC").fetchall()
+    
+    # لیست اطلاعیه‌ها
+    announcements = db.execute("SELECT * FROM announcements ORDER BY created_at DESC").fetchall()
+    
+    content = '''
+    <!-- ===== آمار کلی ===== -->
+    <div class="stats-grid">
+        <div class="stat-card"><div class="number">{{ total_users }}</div><div class="label">👤 کاربران</div></div>
+        <div class="stat-card"><div class="number">{{ total_drugs }}</div><div class="label">💊 داروهای کسری</div></div>
+        <div class="stat-card"><div class="number">{{ total_inventory }}</div><div class="label">📦 موجودی انبار</div></div>
+        <div class="stat-card"><div class="number">{{ total_orders }}</div><div class="label">📋 سفارشات</div></div>
+        <div class="stat-card"><div class="number">{{ total_exchanges }}</div><div class="label">🔄 تبادلات</div></div>
+    </div>
+    
+    <!-- ===== مدیریت کاربران ===== -->
+    <div class="card">
+        <div class="card-title">👤 مدیریت کاربران</div>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>نام کاربری</th>
+                        <th>نام داروخانه</th>
+                        <th>نقش</th>
+                        <th>تاریخ ثبت</th>
+                        <th>عملیات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                        <tr>
+                            <td>{{ user.id }}</td>
+                            <td><strong>{{ user.username }}</strong></td>
+                            <td>{{ user.pharmacy_display_name }}</td>
+                            <td>
+                                {% if user.username == 'admin' %}
+                                    <span class="badge badge-danger">ادمین</span>
+                                {% elif user.is_full_user %}
+                                    <span class="badge badge-success">کاربر کامل</span>
+                                {% else %}
+                                    <span class="badge badge-info">کاربر عادی</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ user.created_at[:10] }}</td>
+                            <td>
+                                {% if user.username != 'admin' %}
+                                    <button onclick="deleteUser({{ user.id }})" class="btn-danger btn-sm">🗑️ حذف</button>
+                                {% else %}
+                                    <span style="color:#999;font-size:11px;">غیرقابل حذف</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- ===== مدیریت مصاحبه‌ها ===== -->
+    <div class="card">
+        <div class="card-title">🎙️ مدیریت مصاحبه‌ها</div>
+        
+        <form method="post" action="/admin/add_interview" style="margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:12px;">
+            <div class="form-row">
+                <input type="text" name="pharmacist_name" placeholder="نام داروساز" required>
+                <input type="text" name="pharmacy_name" placeholder="نام داروخانه" required>
+                <input type="text" name="title" placeholder="عنوان مصاحبه" required>
+            </div>
+            <div class="form-row">
+                <textarea name="content" placeholder="متن مصاحبه..." required></textarea>
+            </div>
+            <div class="form-row">
+                <input type="text" name="image_url" placeholder="آدرس تصویر (اختیاری)">
+                <button type="submit" class="btn-success">➕ افزودن مصاحبه</button>
+            </div>
+        </form>
+        
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>عنوان</th>
+                        <th>داروساز</th>
+                        <th>داروخانه</th>
+                        <th>وضعیت</th>
+                        <th>تاریخ</th>
+                        <th>عملیات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for interview in interviews %}
+                        <tr>
+                            <td>{{ interview.id }}</td>
+                            <td><strong>{{ interview.title }}</strong></td>
+                            <td>{{ interview.pharmacist_name }}</td>
+                            <td>{{ interview.pharmacy_name }}</td>
+                            <td>
+                                {% if interview.is_published %}
+                                    <span class="badge badge-success">✅ منتشر شده</span>
+                                {% else %}
+                                    <span class="badge badge-warning">⏳ پیش‌نویس</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ interview.created_at[:10] }}</td>
+                            <td>
+                                <button onclick="toggleInterview({{ interview.id }})" class="btn-warning btn-sm">
+                                    {% if interview.is_published %}🔒 غیرفعال{% else %}✅ فعال{% endif %}
+                                </button>
+                                <button onclick="deleteInterview({{ interview.id }})" class="btn-danger btn-sm">🗑️</button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- ===== مدیریت اطلاعیه‌ها ===== -->
+    <div class="card">
+        <div class="card-title">📢 مدیریت اطلاعیه‌ها</div>
+        
+        <form method="post" action="/admin/add_announcement" style="margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:12px;">
+            <div class="form-row">
+                <input type="text" name="title" placeholder="عنوان اطلاعیه" required style="flex:1;">
+                <input type="text" name="content" placeholder="متن اطلاعیه" required style="flex:2;">
+                <button type="submit" class="btn-primary">➕ افزودن اطلاعیه</button>
+            </div>
+        </form>
+        
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>عنوان</th>
+                        <th>متن</th>
+                        <th>وضعیت</th>
+                        <th>تاریخ</th>
+                        <th>عملیات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ann in announcements %}
+                        <tr>
+                            <td>{{ ann.id }}</td>
+                            <td><strong>{{ ann.title }}</strong></td>
+                            <td>{{ ann.content[:50] }}{% if ann.content|length > 50 %}...{% endif %}</td>
+                            <td>
+                                {% if ann.is_active %}
+                                    <span class="badge badge-success">✅ فعال</span>
+                                {% else %}
+                                    <span class="badge badge-warning">⏳ غیرفعال</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ ann.created_at[:10] }}</td>
+                            <td>
+                                <button onclick="toggleAnnouncement({{ ann.id }})" class="btn-warning btn-sm">
+                                    {% if ann.is_active %}🔒 غیرفعال{% else %}✅ فعال{% endif %}
+                                </button>
+                                <button onclick="deleteAnnouncement({{ ann.id }})" class="btn-danger btn-sm">🗑️</button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        function deleteUser(userId) {
+            if(!confirm('آیا از حذف این کاربر اطمینان دارید؟')) return;
+            fetch('/admin/delete_user/' + userId, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if(data.success) { alert('✅ کاربر حذف شد'); location.reload(); }
+                    else { alert('❌ خطا: ' + data.error); }
+                });
+        }
+        
+        function deleteInterview(id) {
+            if(!confirm('آیا از حذف این مصاحبه اطمینان دارید؟')) return;
+            fetch('/admin/delete_interview/' + id, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if(data.success) { alert('✅ مصاحبه حذف شد'); location.reload(); }
+                    else { alert('❌ خطا: ' + data.error); }
+                });
+        }
+        
+        function toggleInterview(id) {
+            fetch('/admin/toggle_interview/' + id, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if(data.success) { location.reload(); }
+                    else { alert('❌ خطا: ' + data.error); }
+                });
+        }
+        
+        function deleteAnnouncement(id) {
+            if(!confirm('آیا از حذف این اطلاعیه اطمینان دارید؟')) return;
+            fetch('/admin/delete_announcement/' + id, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if(data.success) { alert('✅ اطلاعیه حذف شد'); location.reload(); }
+                    else { alert('❌ خطا: ' + data.error); }
+                });
+        }
+        
+        function toggleAnnouncement(id) {
+            fetch('/admin/toggle_announcement/' + id, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if(data.success) { location.reload(); }
+                    else { alert('❌ خطا: ' + data.error); }
+                });
+        }
+    </script>
+    '''
+    return render_template_string(HTML, content=content, 
+                                  total_users=total_users, total_drugs=total_drugs,
+                                  total_inventory=total_inventory, total_orders=total_orders,
+                                  total_exchanges=total_exchanges, users=users,
+                                  interviews=interviews, announcements=announcements,
+                                  session=session)
+
+# ==================== روت‌های API ادمین ====================
+
+@app.route('/admin/delete_user/<int:user_id>', methods=['POST'])
+@admin_required
+def admin_delete_user(user_id):
+    db = get_db()
+    cursor = db.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        return jsonify({'success': False, 'error': 'کاربر یافت نشد'})
+    if user['username'] == 'admin':
+        return jsonify({'success': False, 'error': 'نمی‌توان ادمین را حذف کرد'})
+    
+    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.execute("DELETE FROM drugs WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM inventory WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM orders WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM sales WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM exchanges WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM user_categories WHERE user_id = ?", (user_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/admin/add_interview', methods=['POST'])
+@admin_required
+def admin_add_interview():
+    pharmacist_name = request.form.get('pharmacist_name')
+    pharmacy_name = request.form.get('pharmacy_name')
+    title = request.form.get('title')
+    content = request.form.get('content')
+    image_url = request.form.get('image_url', '')
+    
+    if not all([pharmacist_name, pharmacy_name, title, content]):
+        return "❌ همه فیلدها اجباری هستند", 400
+    
+    db = get_db()
+    db.execute('''INSERT INTO interviews (pharmacist_name, pharmacy_name, title, content, image_url, created_at, is_published)
+                  VALUES (?, ?, ?, ?, ?, ?, 1)''',
+               (pharmacist_name, pharmacy_name, title, content, image_url, datetime.now().isoformat()))
+    db.commit()
+    return redirect(url_for('admin_panel'))
+
+@app.route('/admin/delete_interview/<int:interview_id>', methods=['POST'])
+@admin_required
+def admin_delete_interview(interview_id):
+    db = get_db()
+    db.execute("DELETE FROM interviews WHERE id = ?", (interview_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/admin/toggle_interview/<int:interview_id>', methods=['POST'])
+@admin_required
+def admin_toggle_interview(interview_id):
+    db = get_db()
+    cursor = db.execute("SELECT is_published FROM interviews WHERE id = ?", (interview_id,))
+    interview = cursor.fetchone()
+    if not interview:
+        return jsonify({'success': False, 'error': 'مصاحبه یافت نشد'})
+    new_status = 0 if interview['is_published'] else 1
+    db.execute("UPDATE interviews SET is_published = ? WHERE id = ?", (new_status, interview_id))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/admin/add_announcement', methods=['POST'])
+@admin_required
+def admin_add_announcement():
+    title = request.form.get('title')
+    content = request.form.get('content')
+    
+    if not title or not content:
+        return "❌ همه فیلدها اجباری هستند", 400
+    
+    db = get_db()
+    db.execute('''INSERT INTO announcements (title, content, created_at, is_active)
+                  VALUES (?, ?, ?, 1)''',
+               (title, content, datetime.now().isoformat()))
+    db.commit()
+    return redirect(url_for('admin_panel'))
+
+@app.route('/admin/delete_announcement/<int:ann_id>', methods=['POST'])
+@admin_required
+def admin_delete_announcement(ann_id):
+    db = get_db()
+    db.execute("DELETE FROM announcements WHERE id = ?", (ann_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/admin/toggle_announcement/<int:ann_id>', methods=['POST'])
+@admin_required
+def admin_toggle_announcement(ann_id):
+    db = get_db()
+    cursor = db.execute("SELECT is_active FROM announcements WHERE id = ?", (ann_id,))
+    ann = cursor.fetchone()
+    if not ann:
+        return jsonify({'success': False, 'error': 'اطلاعیه یافت نشد'})
+    new_status = 0 if ann['is_active'] else 1
+    db.execute("UPDATE announcements SET is_active = ? WHERE id = ?", (new_status, ann_id))
+    db.commit()
+    return jsonify({'success': True})
+
+# ==================== روت‌های قبلی (داشبورد، انبار، تبادل، کسری) ====================
+
+@app.route('/dashboard')
 @login_required
 def dashboard():
+    # همان کد قبلی داشبورد
     content = '''
     <div class="dashboard-tab">
         <button class="active" onclick="showDashboardTab('assistant')">📋 دستیار خرید</button>
@@ -786,7 +1444,9 @@ def dashboard():
     setInterval(loadOrders, 10000);
     </script>
     '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
+    return render_template_string(HTML, content=content, session=session)
+
+# ==================== بقیه روت‌ها (همان کد قبلی) ====================
 
 @app.route('/deficit')
 @login_required
@@ -945,7 +1605,7 @@ def deficit():
     loadDrugs();
     </script>
     '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
+    return render_template_string(HTML, content=content, session=session)
 
 @app.route('/inventory')
 @login_required
@@ -986,6 +1646,7 @@ def inventory():
         </div>
         <div id="expiryError" class="error-text">❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12 یا 2026.03)</div>
     </div>
+    
     <div class="card">
         <div class="card-title">💸 داروهای رفته (ثبت فروش)</div>
         <div class="form-row">
@@ -1020,6 +1681,7 @@ def inventory():
             <button onclick="registerSale()" class="btn-success">ثبت فروش</button>
         </div>
     </div>
+    
     <div class="card">
         <div class="card-title">🔄 جابجایی دارو بین مکان‌ها</div>
         <div class="form-row">
@@ -1056,6 +1718,7 @@ def inventory():
             <button onclick="moveDrug()">انتقال</button>
         </div>
     </div>
+    
     <div class="card">
         <div class="card-title">📊 لیست انبار (گروه‌بندی بر اساس تاریخ انقضا)</div>
         <div class="toolbar">
@@ -1070,10 +1733,9 @@ def inventory():
         <div id="stats" class="stats-grid"></div>
         <div id="inventoryContainer"></div>
     </div>
+    
     <script>
-    // ===== انتخاب تاریخ انقضا =====
     document.addEventListener('DOMContentLoaded', function() {
-        // انتخاب سال برای ثبت فاکتور
         document.querySelectorAll('.year-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.year-btn').forEach(b => b.classList.remove('active'));
@@ -1082,7 +1744,6 @@ def inventory():
             });
         });
         
-        // انتخاب ماه برای ثبت فاکتور
         document.getElementById('monthGrid').addEventListener('click', function(e) {
             let btn = e.target.closest('.month-btn');
             if(!btn) return;
@@ -1095,7 +1756,6 @@ def inventory():
             document.getElementById('selectedDateText').textContent = fullDate;
         });
         
-        // انتخاب سال برای فروش
         document.querySelectorAll('.year-btn-sale').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.year-btn-sale').forEach(b => b.classList.remove('active'));
@@ -1104,7 +1764,6 @@ def inventory():
             });
         });
         
-        // انتخاب ماه برای فروش
         document.getElementById('monthGridSale').addEventListener('click', function(e) {
             let btn = e.target.closest('.month-btn-sale');
             if(!btn) return;
@@ -1115,7 +1774,6 @@ def inventory():
             document.getElementById('saleExpiry').value = year + '.' + month;
         });
         
-        // انتخاب سال برای جابجایی
         document.querySelectorAll('.year-btn-move').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.year-btn-move').forEach(b => b.classList.remove('active'));
@@ -1124,7 +1782,6 @@ def inventory():
             });
         });
         
-        // انتخاب ماه برای جابجایی
         document.getElementById('monthGridMove').addEventListener('click', function(e) {
             let btn = e.target.closest('.month-btn-move');
             if(!btn) return;
@@ -1135,7 +1792,6 @@ def inventory():
             document.getElementById('moveExpiry').value = year + '.' + month;
         });
         
-        // تنظیم مقدار پیش‌فرض تاریخ برای ثبت فاکتور
         let defaultMonth = document.querySelector('.month-btn');
         if(defaultMonth) {
             defaultMonth.classList.add('selected');
@@ -1206,7 +1862,6 @@ def inventory():
         });
         document.getElementById('moveExpiry').value = '';
     }
-    // =============================================
     
     let inventoryData = [];
     let currentFilter = '';
@@ -1540,7 +2195,7 @@ def inventory():
     loadInventory();
     </script>
     '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
+    return render_template_string(HTML, content=content, session=session)
 
 @app.route('/exchange')
 @login_required
@@ -2030,14 +2685,12 @@ def exchange():
                 html += '<div class="exchange-card"><div class="exchange-card-header"><h4>🏥 ' + sourceName + ' به شما پیشنهاد تبادل داده است</h4><div class="date">' + d.toLocaleDateString('fa-IR') + ' ' + d.toLocaleTimeString('fa-IR') + '</div></div>';
                 html += '<div class="exchange-card-body">';
                 
-                // داروهایی که از شما می‌خواهد (target_items = داروهای هدف که از شما می‌خواهد)
                 if(targetItems.length > 0) {
                     html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#dc3545;">📦 داروهایی که از شما درخواست کرده:</div><ul class="exchange-drug-list">';
                     html += targetItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
                     html += '</ul></div>';
                 }
                 
-                // داروهایی که به شما می‌دهد (my_items = داروهای من که به شما می‌دهد)
                 if(myItems.length > 0) {
                     html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#28a745;">📦 داروهایی که به شما می‌دهد:</div><ul class="exchange-drug-list">';
                     html += myItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
@@ -2118,9 +2771,9 @@ def exchange():
     loadExchangeAllDrugs();
     </script>
     '''
-    return HTML.replace('<div id="dynamicContent"></div>', f'<div id="dynamicContent">{content}</div>')
+    return render_template_string(HTML, content=content, session=session)
 
-# ==================== API ENDPOINTS ====================
+# ==================== API ENDPOINTS (همان کد قبلی) ====================
 
 @app.route('/api/toggle_hidden_items', methods=['POST'])
 @login_required
@@ -2344,13 +2997,10 @@ def register_dual_exchange():
     if not target_pharmacy_id:
         return jsonify({'success': False, 'error': 'داروخانه هدف انتخاب نشده است'})
     
-    # ثبت درخواست برای داروخانه هدف (دریافت کننده) - target_items داروهایی است که از شما می‌خواهد
     for item in target_items:
-        # نام و تاریخ انقضا را از آیتم دریافت می‌کنیم
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
         quantity = item.get('quantity')
-        # برای داروخانه هدف، target_items یعنی داروهایی که از شما می‌خواهد
         db.execute('''INSERT INTO exchanges (
             user_id, buyer_name, drug_name, quantity, expiry_date, location, 
             exchange_date, status, target_pharmacy_id, sender_categories, 
@@ -2360,7 +3010,6 @@ def register_dual_exchange():
              datetime.now().isoformat(), user_id, sender_categories,
              json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
-    # ثبت درخواست برای خود کاربر (فرستنده) - my_items داروهایی است که می‌دهد
     for item in my_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
@@ -2382,8 +3031,6 @@ def register_dual_exchange():
 def get_pending_exchanges():
     user_id = session['user_id']
     db = get_db()
-    # دریافت تبادلاتی که کاربر دریافت‌کننده است (user_id = کاربر فعلی)
-    # و source_pharmacy_id کاربر فرستنده است
     cursor = db.execute("""
         SELECT e.*, 
                e.source_pharmacy_name
@@ -2393,8 +3040,6 @@ def get_pending_exchanges():
     """, (user_id,))
     exchanges = [dict(row) for row in cursor.fetchall()]
     
-    # فیلتر کردن برای نمایش فقط تبادلاتی که کاربر دریافت‌کننده است
-    # (یعنی user_id = کاربر فعلی و source_pharmacy_id != کاربر فعلی)
     filtered = [e for e in exchanges if e['source_pharmacy_id'] != user_id]
     
     return jsonify({'exchanges': filtered})
@@ -2405,22 +3050,18 @@ def confirm_exchange(exchange_id):
     db = get_db()
     user_id = session['user_id']
     
-    # دریافت تبادل
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
         return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا تایید شده است'})
     
-    # داروهایی که از شما درخواست کرده (target_items)
     target_items = json.loads(exchange['target_items_json']) if exchange['target_items_json'] else []
     
-    # بررسی موجودی و کم کردن از انبار کاربر
     for item in target_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
         quantity = item.get('quantity')
         
-        # پیدا کردن موجودی با نام و تاریخ انقضا (هر مکانی)
         cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0", 
                            (user_id, drug_name, expiry_date))
         inv_items = cursor.fetchall()
@@ -2441,14 +3082,12 @@ def confirm_exchange(exchange_id):
                 db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
             remaining -= take
     
-    # داروهایی که به شما می‌دهد (my_items) - اضافه شدن به انبار کاربر
     my_items = json.loads(exchange['my_items_json']) if exchange['my_items_json'] else []
     for item in my_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
         quantity = item.get('quantity')
         
-        # اضافه کردن به داروخانه (pharmacy)
         cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = 'pharmacy'", 
                            (user_id, drug_name, expiry_date))
         inv_item = cursor.fetchone()
@@ -2459,11 +3098,8 @@ def confirm_exchange(exchange_id):
                           VALUES (?, ?, ?, ?, ?, ?)''',
                        (user_id, drug_name, quantity, expiry_date, 'pharmacy', datetime.now().isoformat()))
     
-    # به‌روزرسانی وضعیت تبادل
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
     
-    # همچنین تبادل مرتبط با طرف دیگر را هم تایید کنید
-    # اگر source_pharmacy_id = کاربر فعلی و target_pharmacy_id = user_id تبادل
     db.execute("""UPDATE exchanges SET status = 'confirmed' 
                   WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'""", 
                (exchange['source_pharmacy_id'], user_id))
@@ -2481,10 +3117,8 @@ def reject_exchange(exchange_id):
     if not exchange:
         return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
     
-    # حذف تبادل
     db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
     
-    # حذف تبادل مرتبط با طرف دیگر
     db.execute("DELETE FROM exchanges WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'", 
                (exchange['source_pharmacy_id'], user_id))
     
@@ -2552,7 +3186,7 @@ def add_drug():
     db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at, ordered) VALUES (?, ?, ?, ?, ?, ?, ?)',
                (user_id, name, quantity, drug_type, priority, datetime.now().isoformat(), 0))
     db.commit()
-    return jsonify({"success": False, "error": "تعداد نامعتبر است"})
+    return jsonify({"success": True})
 
 @app.route('/api/get_drugs')
 @login_required
@@ -2615,7 +3249,6 @@ def add_inventory():
     name = request.form['name']
     quantity_str = request.form['quantity']
     
-    # بررسی مقدار تعداد
     try:
         quantity = int(quantity_str)
         if quantity <= 0:
@@ -2742,6 +3375,7 @@ if __name__ == '__main__':
     print("✅ داروخانه با موفقیت راه اندازی شد")
     print("=" * 50)
     print("🌐 آدرس: http://0.0.0.0:5000")
+    print("👑 ادمین: admin / admin123")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
 EOF
