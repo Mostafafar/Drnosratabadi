@@ -6,9 +6,8 @@ cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 import sqlite3
 import hashlib
 import json
-from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory, render_template_string
 from datetime import datetime, timedelta
-send_from_directory, render_template_string
+from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory, render_template_string
 from functools import wraps
 import os
 import base64
@@ -335,6 +334,12 @@ def init_db():
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN source_pharmacy_name TEXT DEFAULT ''")
     except sqlite3.OperationalError:
+        pass
+    
+    # ===== به‌روزرسانی کاربران قبلی =====
+    try:
+        db.execute("UPDATE users SET is_approved = 1 WHERE is_approved IS NULL")
+    except:
         pass
     
     # ===== ایجاد کاربران پیش‌فرض =====
@@ -819,8 +824,13 @@ def login():
         user = cursor.fetchone()
         
         if user and user['password_hash'] == hash_password(password):
-            # بررسی تأیید حساب (is_approved = 1 یعنی تأیید شده)
-            if user.get('is_approved', 1) == 0:
+            # بررسی وجود فیلد is_approved با try/except
+            try:
+                is_approved = user['is_approved']
+            except (KeyError, IndexError):
+                is_approved = 1
+            
+            if is_approved == 0:
                 return '''
                 <!DOCTYPE html>
                 <html dir="rtl" lang="fa">
@@ -849,7 +859,7 @@ def login():
             session['username'] = user['username']
             session['is_full_user'] = user['is_full_user']
             session['pharmacy_display_name'] = user['pharmacy_display_name']
-            session['is_approved'] = user.get('is_approved', 1)
+            session['is_approved'] = is_approved
             return redirect(url_for('index'))
         
         return '''
@@ -934,8 +944,6 @@ def register():
         if password != confirm_password:
             return '❌ رمز عبور و تکرار آن مطابقت ندارند'
         
-        # نام کاربری می‌تواند شامل هر کاراکتری باشد (فارسی، انگلیسی، اعداد)
-        # فقط فاصله مجاز نیست
         if ' ' in username:
             return '❌ نام کاربری نباید شامل فاصله باشد'
         
@@ -947,7 +955,6 @@ def register():
         if cursor.fetchone()['count'] > 0:
             return '❌ این نام کاربری قبلاً ثبت شده است'
         
-        # کاربر جدید با is_approved = 1 (تأیید شده) ثبت می‌شود
         db.execute('''INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at, phone_number, address, is_approved)
                       VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
                    (username, hash_password(password), 0, pharmacy_name, datetime.now().isoformat(), phone_number, address))
@@ -956,13 +963,14 @@ def register():
         # ===== ورود خودکار بعد از ثبت‌نام =====
         cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
         user = cursor.fetchone()
+        
         session.clear()
         session['logged_in'] = True
         session['user_id'] = user['id']
         session['username'] = user['username']
         session['is_full_user'] = user['is_full_user']
         session['pharmacy_display_name'] = user['pharmacy_display_name']
-        session['is_approved'] = user.get('is_approved', 1)
+        session['is_approved'] = 1
         
         return redirect(url_for('index'))
     
@@ -1092,13 +1100,15 @@ def inventory():
 @app.route('/exchange')
 @login_required
 def exchange():
-    # دریافت لیست داروخانه‌های دیگر با مخفی‌سازی نام برای کاربران در انتظار تأیید
     db = get_db()
     cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ?", (session['user_id'],))
     pharmacies = cursor.fetchall()
     
     # بررسی وضعیت کاربر برای مخفی‌سازی نام
-    is_pending = session.get('is_approved', 1) == 0
+    try:
+        is_pending = session.get('is_approved', 1) == 0
+    except:
+        is_pending = False
     
     pharmacy_options = ''
     for p in pharmacies:
@@ -1181,7 +1191,6 @@ def deficit():
 def admin_panel():
     db = get_db()
     
-    # آمار
     cursor = db.execute("SELECT COUNT(*) as count FROM users")
     total_users = cursor.fetchone()['count']
     
@@ -1194,15 +1203,12 @@ def admin_panel():
     cursor = db.execute("SELECT SUM(quantity) as total FROM inventory")
     total_inventory = cursor.fetchone()['total'] or 0
     
-    # لیست کاربران
     cursor = db.execute("SELECT * FROM users ORDER BY created_at DESC")
     users = cursor.fetchall()
     
-    # لیست مصاحبه‌ها
     cursor = db.execute("SELECT * FROM interviews ORDER BY created_at DESC")
     interviews = cursor.fetchall()
     
-    # لیست اطلاعیه‌ها
     cursor = db.execute("SELECT * FROM announcements ORDER BY created_at DESC")
     announcements = cursor.fetchall()
     
@@ -1211,29 +1217,50 @@ def admin_panel():
         status_badge = ''
         if u['username'] == 'admin':
             status_badge = '<span class="badge badge-danger">ادمین</span>'
-        elif u.get('is_approved', 1) == 0:
-            status_badge = '<span class="badge badge-warning">⏳ در انتظار تأیید</span>'
-        elif u['is_full_user']:
-            status_badge = '<span class="badge badge-success">کاربر کامل</span>'
         else:
-            status_badge = '<span class="badge badge-info">کاربر عادی</span>'
+            try:
+                is_approved = u['is_approved']
+            except (KeyError, IndexError):
+                is_approved = 1
+            
+            if is_approved == 0:
+                status_badge = '<span class="badge badge-warning">⏳ در انتظار تأیید</span>'
+            elif u['is_full_user']:
+                status_badge = '<span class="badge badge-success">کاربر کامل</span>'
+            else:
+                status_badge = '<span class="badge badge-info">کاربر عادی</span>'
         
         actions = ''
         if u['username'] != 'admin':
-            if u.get('is_approved', 1) == 0:
+            try:
+                is_approved = u['is_approved']
+            except (KeyError, IndexError):
+                is_approved = 1
+            
+            if is_approved == 0:
                 actions += f'<button onclick="approveUser({u["id"]})" class="btn-success btn-sm">✅ تأیید</button> '
                 actions += f'<button onclick="rejectUser({u["id"]})" class="btn-danger btn-sm">❌ رد</button> '
             actions += f'<button onclick="deleteUser({u["id"]})" class="btn-danger btn-sm">🗑️</button>'
         else:
             actions = '<span style="color:#999;font-size:11px;">غیرقابل حذف</span>'
         
+        try:
+            phone = u['phone_number'] or '-'
+        except:
+            phone = '-'
+        
+        try:
+            addr = u['address'] or '-'
+        except:
+            addr = '-'
+        
         users_html += f'''
         <tr>
             <td>{u['id']}</td>
             <td><strong>{u['username']}</strong></td>
             <td>{u['pharmacy_display_name']}</td>
-            <td>{u.get('phone_number', '-')}</td>
-            <td>{u.get('address', '-')}</td>
+            <td>{phone}</td>
+            <td>{addr}</td>
             <td>{status_badge}</td>
             <td>{u['created_at'][:10]}</td>
             <td>{actions}</td>
@@ -1531,12 +1558,18 @@ def api_get_current_user():
     user = get_current_user_from_session()
     if not user:
         return jsonify({'error': 'user not found'}), 404
+    
+    try:
+        is_approved = user['is_approved']
+    except (KeyError, IndexError):
+        is_approved = 1
+    
     return jsonify({
         'id': user['id'],
         'username': user['username'],
         'is_full_user': user['is_full_user'],
         'pharmacy_display_name': user['pharmacy_display_name'],
-        'is_approved': user.get('is_approved', 1)
+        'is_approved': is_approved
     })
 
 @app.route('/api/get_drugs')
@@ -1581,8 +1614,11 @@ def api_get_all_pharmacies():
     cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ?", (session['user_id'],))
     pharmacies = cursor.fetchall()
     
-    # مخفی‌سازی نام برای کاربران در انتظار تأیید
-    is_pending = session.get('is_approved', 1) == 0
+    try:
+        is_pending = session.get('is_approved', 1) == 0
+    except:
+        is_pending = False
+    
     result = []
     for p in pharmacies:
         name = p['pharmacy_display_name']
@@ -1781,7 +1817,6 @@ def move_inventory():
     db.commit()
     return jsonify({'success': True})
 
-# ===== ثبت تبادل =====
 @app.route('/api/register_exchange', methods=['POST'])
 @login_required
 def register_exchange():
@@ -1804,14 +1839,12 @@ def register_exchange():
     target = cursor.fetchone()
     target_name = target['pharmacy_display_name'] if target else 'داروخانه هدف'
     
-    # ثبت برای داروخانه هدف
     for item in target_items:
         db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
                       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)''',
                    (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
                     datetime.now().isoformat(), user_id, json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
-    # ثبت برای خود کاربر
     for item in my_items:
         db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
                       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)''',
@@ -1836,7 +1869,6 @@ def get_pending_exchanges():
     user_id = session['user_id']
     cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? AND status = 'pending' ORDER BY exchange_date DESC", (user_id,))
     exchanges = [dict(row) for row in cursor.fetchall()]
-    # فیلتر برای تبادلات دریافتی
     filtered = [e for e in exchanges if e.get('source_pharmacy_id') and e['source_pharmacy_id'] != user_id]
     return jsonify({'exchanges': filtered})
 
@@ -1851,11 +1883,9 @@ def confirm_exchange(exchange_id):
     if not exchange:
         return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
     
-    # دریافت آیتم‌ها
     target_items = json.loads(exchange['target_items_json']) if exchange['target_items_json'] else []
     my_items = json.loads(exchange['my_items_json']) if exchange['my_items_json'] else []
     
-    # کم کردن از انبار کاربر (داروهایی که از شما خواسته)
     for item in target_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
@@ -1880,7 +1910,6 @@ def confirm_exchange(exchange_id):
                 db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
             remaining -= take
     
-    # اضافه کردن به انبار کاربر (داروهایی که به شما می‌دهد)
     for item in my_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
@@ -1896,8 +1925,6 @@ def confirm_exchange(exchange_id):
                        (user_id, drug_name, quantity, expiry_date, 'pharmacy', datetime.now().isoformat()))
     
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
-    
-    # تایید تبادل مرتبط با طرف دیگر
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                (exchange.get('source_pharmacy_id'), user_id))
     
@@ -1916,8 +1943,6 @@ def reject_exchange(exchange_id):
         return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
     
     db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
-    
-    # حذف تبادل مرتبط با طرف دیگر
     if exchange.get('source_pharmacy_id'):
         db.execute("DELETE FROM exchanges WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                    (exchange['source_pharmacy_id'], user_id))
