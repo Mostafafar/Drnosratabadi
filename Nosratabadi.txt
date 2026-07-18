@@ -7,7 +7,7 @@ import sqlite3
 import hashlib
 import json
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory
+from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory, render_template_string
 from functools import wraps
 import os
 import base64
@@ -151,7 +151,6 @@ def mask_pharmacy_name(name):
         return name
     if len(name) <= 6:
         return name
-    # نمایش حرف اول و آخر با نقطه‌چین
     return name[:6] + '......' + name[-1] if len(name) > 7 else name[:3] + '......' + name[-1]
 
 def init_db():
@@ -167,7 +166,7 @@ def init_db():
         created_at TEXT NOT NULL,
         phone_number TEXT,
         address TEXT,
-        is_approved INTEGER DEFAULT 0
+        is_approved INTEGER DEFAULT 1
     )''')
     
     db.execute('''CREATE TABLE IF NOT EXISTS drugs (
@@ -298,7 +297,7 @@ def init_db():
         pass
     
     try:
-        db.execute("ALTER TABLE users ADD COLUMN is_approved INTEGER DEFAULT 0")
+        db.execute("ALTER TABLE users ADD COLUMN is_approved INTEGER DEFAULT 1")
     except sqlite3.OperationalError:
         pass
     
@@ -438,7 +437,7 @@ HTML = '''<!DOCTYPE html>
         .topbar {
             background: #1a1a1a;
             color: white;
-            padding: 8px 20px;
+            padding: 6px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -448,46 +447,46 @@ HTML = '''<!DOCTYPE html>
             right: 0;
             z-index: 9999;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 5px;
         }
-        .topbar .brand { font-size: 18px; font-weight: bold; color: white; text-decoration: none; }
+        .topbar .brand { font-size: 16px; font-weight: bold; color: white; text-decoration: none; }
         .topbar .brand span { color: #4fc3f7; }
-        .topbar .nav-links { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+        .topbar .nav-links { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .topbar .nav-links a {
             color: #e0e0e0;
             text-decoration: none;
-            font-size: 13px;
-            padding: 4px 10px;
+            font-size: 12px;
+            padding: 3px 8px;
             border-radius: 6px;
             transition: all 0.3s;
         }
         .topbar .nav-links a:hover { background: #333; color: white; }
         .topbar .nav-links a.active { background: #333; color: white; }
-        .topbar .nav-links .btn-login { background: #4fc3f7; color: #1a1a1a; padding: 4px 16px; border-radius: 6px; font-weight: bold; }
+        .topbar .nav-links .btn-login { background: #4fc3f7; color: #1a1a1a; padding: 3px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; }
         .topbar .nav-links .btn-login:hover { background: #81d4fa; }
-        .topbar .nav-links .btn-register { background: #28a745; color: white; padding: 4px 16px; border-radius: 6px; font-weight: bold; }
-        .topbar .nav-links .btn-logout { background: #dc3545; color: white; padding: 4px 14px; border-radius: 6px; }
-        .topbar .user-badge { background: #333; padding: 4px 12px; border-radius: 20px; font-size: 12px; color: #aaa; }
+        .topbar .nav-links .btn-register { background: #28a745; color: white; padding: 3px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; }
+        .topbar .nav-links .btn-logout { background: #dc3545; color: white; padding: 3px 10px; border-radius: 6px; font-size: 12px; }
+        .topbar .user-badge { background: #333; padding: 3px 10px; border-radius: 20px; font-size: 11px; color: #aaa; }
         .topbar .user-badge strong { color: white; }
         
         .sidebar {
             position: fixed;
             right: 0;
-            top: 52px;
-            width: 220px;
-            height: calc(100% - 52px);
+            top: 46px;
+            width: 200px;
+            height: calc(100% - 46px);
             background: #1a1a1a;
             color: white;
             z-index: 1000;
             overflow-y: auto;
         }
-        .sidebar-menu { list-style: none; padding: 10px 0; }
+        .sidebar-menu { list-style: none; padding: 8px 0; }
         .sidebar-menu li { margin-bottom: 2px; }
         .sidebar-menu a {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 18px;
+            gap: 10px;
+            padding: 8px 16px;
             color: #e0e0e0;
             text-decoration: none;
             transition: all 0.3s;
@@ -496,82 +495,81 @@ HTML = '''<!DOCTYPE html>
         .sidebar-menu a:hover { background: #333; color: white; }
         .sidebar-menu a.active { background: #2c2c2c; border-right: 3px solid #4fc3f7; }
         .sidebar-menu .admin-link { border-right: 3px solid #ffc107; }
-        .sidebar-menu .guest-link { border-right: 3px solid #6c757d; }
         
         .main-content {
-            margin-right: 220px;
-            margin-top: 52px;
-            padding: 20px;
-            min-height: calc(100vh - 52px);
+            margin-right: 200px;
+            margin-top: 46px;
+            padding: 15px;
+            min-height: calc(100vh - 46px);
         }
         
         .header {
             background: white;
-            border-radius: 12px;
-            padding: 12px 20px;
-            margin-bottom: 20px;
+            border-radius: 10px;
+            padding: 10px 18px;
+            margin-bottom: 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        .page-title { font-size: 18px; font-weight: 600; }
-        .user-info { display: flex; gap: 15px; align-items: center; font-size: 13px; }
+        .page-title { font-size: 17px; font-weight: 600; }
+        .user-info { display: flex; gap: 12px; align-items: center; font-size: 12px; }
         
         .card {
             background: white;
-            border-radius: 12px;
-            padding: 18px;
-            margin-bottom: 20px;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
         .card-title {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 6px;
             border-bottom: 2px solid #e0e0e0;
         }
         
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 15px;
         }
         .stat-card {
             background: white;
-            padding: 12px;
-            border-radius: 12px;
+            padding: 10px;
+            border-radius: 10px;
             text-align: center;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        .stat-card .number { font-size: 24px; font-weight: bold; }
-        .stat-card .label { color: #666; font-size: 12px; margin-top: 5px; }
+        .stat-card .number { font-size: 22px; font-weight: bold; }
+        .stat-card .label { color: #666; font-size: 11px; margin-top: 4px; }
         
         .form-row {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             flex-wrap: wrap;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             align-items: center;
         }
         .form-row input, .form-row select, .form-row textarea {
             flex: 1;
-            min-width: 130px;
-            padding: 8px 10px;
+            min-width: 120px;
+            padding: 7px 10px;
             border: 1px solid #ddd;
-            border-radius: 8px;
+            border-radius: 6px;
             font-size: 13px;
         }
-        .form-row textarea { min-height: 80px; resize: vertical; }
+        .form-row textarea { min-height: 70px; resize: vertical; }
         
         button {
             background: #1a1a1a;
             color: white;
             border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
+            padding: 7px 14px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
         }
@@ -579,17 +577,17 @@ HTML = '''<!DOCTYPE html>
         .btn-success { background: #28a745; }
         .btn-warning { background: #ffc107; color: #1a1a1a; }
         .btn-primary { background: #007bff; }
-        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        .btn-sm { padding: 3px 8px; font-size: 11px; }
         
         .table-responsive { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        table th, table td { padding: 10px 12px; text-align: center; border-bottom: 1px solid #eee; }
+        table th, table td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #eee; }
         table th { background: #f0f0f0; font-weight: bold; }
         table tr:hover { background: #f9f9f9; }
         
         .badge {
             display: inline-block;
-            padding: 2px 10px;
+            padding: 2px 8px;
             border-radius: 20px;
             font-size: 11px;
         }
@@ -600,17 +598,35 @@ HTML = '''<!DOCTYPE html>
         
         .interview-card {
             background: white;
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 15px;
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 12px;
             border: 1px solid #e0e0e0;
         }
-        .interview-card h3 { margin-bottom: 8px; color: #1a1a1a; }
-        .interview-card .meta { font-size: 12px; color: #666; margin-bottom: 10px; }
-        .interview-card .content { font-size: 14px; line-height: 1.8; }
-        .interview-card .media { margin-top: 10px; }
-        .interview-card .media img { max-width: 100%; border-radius: 8px; max-height: 400px; }
+        .interview-card h3 { margin-bottom: 6px; color: #1a1a1a; font-size: 16px; }
+        .interview-card .meta { font-size: 11px; color: #666; margin-bottom: 8px; }
+        .interview-card .content { font-size: 13px; line-height: 1.8; }
+        .interview-card .media { margin-top: 8px; }
+        .interview-card .media img { max-width: 100%; border-radius: 6px; max-height: 300px; }
         .interview-card .media audio { width: 100%; }
+        
+        .exchange-tab { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
+        .exchange-tab button { background: none; color: #1a1a1a; border: none; padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 0; }
+        .exchange-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .deficit-table { width: 100%; border-collapse: collapse; }
+        .deficit-table th, .deficit-table td { padding: 8px; text-align: center; border-bottom: 1px solid #eee; }
+        .deficit-table th { background: #f0f0f0; font-weight: bold; }
+        
+        .expiry-picker { background: #f8f9fa; padding: 12px; border-radius: 10px; border: 1px solid #e0e0e0; }
+        .year-selector { display: flex; gap: 8px; margin-bottom: 10px; }
+        .year-btn { padding: 6px 16px; border: 2px solid #ddd; border-radius: 6px; background: white; cursor: pointer; font-weight: bold; font-size: 13px; }
+        .year-btn.active { border-color: #1a1a1a; background: #1a1a1a; color: white; }
+        .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+        .month-btn { padding: 8px 4px; border: 1px solid #ddd; border-radius: 6px; background: white; cursor: pointer; font-size: 11px; text-align: center; }
+        .month-btn.selected { background: #1a1a1a; color: white; border-color: #1a1a1a; }
         
         .search-container { position: relative; flex: 1; }
         .suggestions-list {
@@ -620,89 +636,68 @@ HTML = '''<!DOCTYPE html>
             right: 0;
             background: white;
             border: 1px solid #ddd;
-            border-radius: 8px;
-            max-height: 250px;
+            border-radius: 6px;
+            max-height: 200px;
             overflow-y: auto;
             z-index: 1000;
             display: none;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
-        .suggestions-list div { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .suggestions-list div { padding: 8px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; }
         .suggestions-list div:hover { background: #f0f0f0; }
-        .suggestions-list .stock-info { font-size: 11px; color: #666; margin-top: 4px; }
+        .suggestions-list .stock-info { font-size: 11px; color: #666; margin-top: 3px; }
         
-        .expiry-tab { border: 1px solid #e0e0e0; border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
-        .expiry-tab-header { padding: 14px 18px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        .expiry-tab-body { display: none; padding: 10px 15px; background: #fafafa; }
-        .expiry-tab-body.show { display: block; }
-        
-        .pharmacy-group { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
-        .pharmacy-group-header { background: #f0f0f0; padding: 10px 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-weight: bold; }
-        .pharmacy-group-body { display: none; padding: 8px 12px; background: white; }
-        .pharmacy-group-body.show { display: block; }
-        
-        .drug-item { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
-        .drug-item:last-child { border-bottom: none; }
-        .drug-item .drug-name { font-weight: bold; flex: 1; min-width: 100px; }
-        .drug-item .drug-qty { color: #555; }
-        .drug-item .drug-location { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
-        
-        .exchange-dual-container { display: flex; gap: 20px; flex-wrap: wrap; }
-        .exchange-list-box { flex: 1; min-width: 280px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .exchange-list-header { background: #1a1a1a; color: white; padding: 12px; text-align: center; font-weight: bold; }
+        .exchange-dual-container { display: flex; gap: 15px; flex-wrap: wrap; }
+        .exchange-list-box { flex: 1; min-width: 250px; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .exchange-list-header { background: #1a1a1a; color: white; padding: 10px; text-align: center; font-weight: bold; font-size: 13px; }
         .exchange-list-header.active { background: #28a745; }
-        .exchange-list-items { max-height: 400px; overflow-y: auto; padding: 5px; }
-        .exchange-drug-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; border-radius: 6px; }
+        .exchange-list-items { max-height: 350px; overflow-y: auto; padding: 5px; }
+        .exchange-drug-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #eee; cursor: pointer; border-radius: 4px; font-size: 13px; }
         .exchange-drug-item:hover { background: #f5f5f5; }
         .exchange-drug-item.selected { background: #d4edda; }
         
-        .exchange-tab { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
-        .exchange-tab button { background: none; color: #1a1a1a; border: none; padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 0; }
-        .exchange-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .exchange-card { background: white; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; border: 1px solid #e0e0e0; }
+        .exchange-card-header { background: #1a1a1a; color: white; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+        .exchange-card-footer { padding: 8px 14px; background: #f8f9fa; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid #e0e0e0; }
+        .status-pending { background: #ffc107; color: #1a1a1a; padding: 2px 8px; border-radius: 20px; font-size: 11px; }
+        .status-confirmed { background: #28a745; color: white; padding: 2px 8px; border-radius: 20px; font-size: 11px; }
         
-        .deficit-table { width: 100%; border-collapse: collapse; }
-        .deficit-table th, .deficit-table td { padding: 10px; text-align: center; border-bottom: 1px solid #eee; }
-        .deficit-table th { background: #f0f0f0; font-weight: bold; }
-        .deficit-table tr:hover { background: #f9f9f9; }
+        .drugs-columns { display: flex; gap: 15px; flex-wrap: wrap; }
+        .drugs-column { flex: 1; min-width: 220px; background: #fafafa; border-radius: 10px; padding: 10px; }
+        .drugs-column h4 { margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid #ddd; font-size: 14px; }
         
-        .expiry-picker { background: #f8f9fa; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; }
-        .year-selector { display: flex; gap: 10px; margin-bottom: 12px; }
-        .year-btn { padding: 8px 20px; border: 2px solid #ddd; border-radius: 8px; background: white; cursor: pointer; font-weight: bold; font-size: 14px; transition: all 0.3s; }
-        .year-btn:hover { border-color: #999; }
-        .year-btn.active { border-color: #1a1a1a; background: #1a1a1a; color: white; }
-        .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-        .month-btn { padding: 10px 5px; border: 1px solid #ddd; border-radius: 8px; background: white; cursor: pointer; font-size: 12px; text-align: center; transition: all 0.3s; }
-        .month-btn:hover { background: #f0f0f0; border-color: #999; }
-        .month-btn.selected { background: #1a1a1a; color: white; border-color: #1a1a1a; }
-        
-        .exchange-filter { margin-bottom: 15px; }
-        .exchange-card { background: white; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; border: 1px solid #e0e0e0; }
-        .exchange-card-header { background: #1a1a1a; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        .exchange-card-footer { padding: 10px 16px; background: #f8f9fa; display: flex; gap: 10px; justify-content: flex-end; border-top: 1px solid #e0e0e0; }
-        
-        .status-pending { background: #ffc107; color: #1a1a1a; }
-        .status-confirmed { background: #28a745; color: white; }
-        
-        .dashboard-tab { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
-        .dashboard-tab button { background: none; color: #1a1a1a; border: none; padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 0; }
+        .dashboard-tab { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
+        .dashboard-tab button { background: none; color: #1a1a1a; border: none; padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 0; }
         .dashboard-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
         
-        .drugs-columns { display: flex; gap: 20px; flex-wrap: wrap; }
-        .drugs-column { flex: 1; min-width: 250px; background: #fafafa; border-radius: 12px; padding: 12px; }
-        .drugs-column h4 { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #ddd; }
-        
-        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px; align-items: center; }
-        .toolbar button { font-size: 12px; padding: 6px 14px; }
+        .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+        .toolbar button { font-size: 11px; padding: 5px 12px; }
         .export-btn { background: #17a2b8; }
         
+        .expiry-tab { border: 1px solid #e0e0e0; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+        .expiry-tab-header { padding: 10px 14px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+        .expiry-tab-body { display: none; padding: 8px 12px; background: #fafafa; }
+        .expiry-tab-body.show { display: block; }
+        
+        .pharmacy-group { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
+        .pharmacy-group-header { background: #f0f0f0; padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px; font-weight: bold; font-size: 13px; }
+        .pharmacy-group-body { display: none; padding: 6px 10px; background: white; }
+        .pharmacy-group-body.show { display: block; }
+        
+        .drug-item { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; font-size: 13px; }
+        .drug-item:last-child { border-bottom: none; }
+        .drug-item .drug-name { font-weight: bold; flex: 1; min-width: 80px; }
+        .drug-item .drug-qty { color: #555; }
+        .drug-item .drug-location { font-size: 10px; padding: 2px 6px; border-radius: 10px; }
+        .location-warehouse { background: #cfe2ff; color: #084298; }
+        .location-pharmacy { background: #d1e7dd; color: #0a3622; }
+        
         @media (max-width: 768px) {
-            .sidebar { width: 60px; }
+            .sidebar { width: 55px; }
             .sidebar .menu-text { display: none; }
-            .main-content { margin-right: 60px; padding: 12px; }
-            .topbar .brand { font-size: 14px; }
-            .topbar .nav-links a { font-size: 11px; padding: 3px 8px; }
+            .main-content { margin-right: 55px; padding: 10px; }
+            .topbar .brand { font-size: 13px; }
+            .topbar .nav-links a { font-size: 10px; padding: 2px 6px; }
             .exchange-dual-container { flex-direction: column; }
             .month-grid { grid-template-columns: repeat(3, 1fr); }
         }
@@ -786,8 +781,8 @@ def index():
                 <div class="meta">👤 {i['pharmacist_name']} | 🏥 {i['pharmacy_name']} | 📅 {i['created_at'][:10]}</div>
                 <div class="content">{i['content']}</div>
                 <div class="media">
-                    {f'<img src="{i["image_url"]}" alt="{i["title"]}" style="max-width:100%;border-radius:8px;max-height:400px;">' if i['image_url'] else ''}
-                    {f'<audio controls style="width:100%;"><source src="{i["audio_url"]}"></audio>' if i['audio_url'] else ''}
+                    {f'<img src="{i["image_url"]}" alt="{i["title"]}">' if i['image_url'] else ''}
+                    {f'<audio controls><source src="{i["audio_url"]}"></audio>' if i['audio_url'] else ''}
                 </div>
             </div>
             '''
@@ -802,9 +797,9 @@ def index():
         '''
         for a in announcements:
             content += f'''
-            <div style="padding:10px 0;border-bottom:1px solid #e0e0e0;">
+            <div style="padding:8px 0;border-bottom:1px solid #e0e0e0;">
                 <strong>{a['title']}</strong>
-                <p style="font-size:13px;color:#555;margin-top:5px;">{a['content']}</p>
+                <p style="font-size:13px;color:#555;margin-top:4px;">{a['content']}</p>
                 <span style="font-size:11px;color:#999;">{a['created_at'][:10]}</span>
             </div>
             '''
@@ -823,8 +818,8 @@ def login():
         user = cursor.fetchone()
         
         if user and user['password_hash'] == hash_password(password):
-            # بررسی تأیید حساب
-            if user.get('is_approved', 0) == 0:
+            # بررسی تأیید حساب (is_approved = 1 یعنی تأیید شده)
+            if user.get('is_approved', 1) == 0:
                 return '''
                 <!DOCTYPE html>
                 <html dir="rtl" lang="fa">
@@ -833,8 +828,6 @@ def login():
                     body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
                     .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
                     .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
-                    .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
-                    .login-box button { width: 100%; padding: 10px; background: #1a1a1a; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
                     .warning { color: #856404; margin-top: 10px; font-size: 13px; background: #fff3cd; padding: 10px; border-radius: 8px; }
                     .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
                 </style>
@@ -934,14 +927,16 @@ def register():
         if len(username) < 3:
             return '❌ نام کاربری باید حداقل 3 کاراکتر باشد'
         
-        if len(password) < 6:
-            return '❌ رمز عبور باید حداقل 6 کاراکتر باشد'
+        if len(password) < 4:
+            return '❌ رمز عبور باید حداقل 4 کاراکتر باشد'
         
         if password != confirm_password:
             return '❌ رمز عبور و تکرار آن مطابقت ندارند'
         
-        if not re.match(r'^[a-zA-Z0-9_]+$', username):
-            return '❌ نام کاربری فقط می‌تواند شامل حروف انگلیسی، اعداد و زیرخط باشد'
+        # نام کاربری می‌تواند شامل هر کاراکتری باشد (فارسی، انگلیسی، اعداد)
+        # فقط فاصله مجاز نیست
+        if ' ' in username:
+            return '❌ نام کاربری نباید شامل فاصله باشد'
         
         if phone_number and not re.match(r'^09[0-9]{9}$', phone_number):
             return '❌ شماره همراه نامعتبر است. فرمت صحیح: 09121234567'
@@ -951,34 +946,24 @@ def register():
         if cursor.fetchone()['count'] > 0:
             return '❌ این نام کاربری قبلاً ثبت شده است'
         
+        # کاربر جدید با is_approved = 1 (تأیید شده) ثبت می‌شود
         db.execute('''INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at, phone_number, address, is_approved)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, 0)''',
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
                    (username, hash_password(password), 0, pharmacy_name, datetime.now().isoformat(), phone_number, address))
         db.commit()
         
-        return '''
-        <!DOCTYPE html>
-        <html dir="rtl" lang="fa">
-        <head><meta charset="UTF-8"><title>ثبت‌نام</title>
-        <style>
-            body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .success-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 380px; text-align: center; }
-            .success-box h2 { color: #28a745; margin-bottom: 15px; }
-            .success-box .info { color: #856404; background: #fff3cd; padding: 10px; border-radius: 8px; margin: 15px 0; font-size: 13px; }
-            .success-box .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
-        </style>
-        </head>
-        <body>
-        <div class="success-box">
-            <h2>✅ ثبت‌نام با موفقیت انجام شد</h2>
-            <div class="info">⏳ حساب کاربری شما در انتظار تأیید ادمین است. پس از تأیید، می‌توانید وارد سیستم شوید.</div>
-            <p>📱 شماره همراه: {phone_number}</p>
-            <p>🏥 نام داروخانه: {pharmacy_name}</p>
-            <a href="/login" class="back-link">🔐 ورود به سیستم →</a>
-        </div>
-        </body>
-        </html>
-        '''.format(phone_number=phone_number or 'ثبت نشده', pharmacy_name=pharmacy_name)
+        # ===== ورود خودکار بعد از ثبت‌نام =====
+        cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
+        user = cursor.fetchone()
+        session.clear()
+        session['logged_in'] = True
+        session['user_id'] = user['id']
+        session['username'] = user['username']
+        session['is_full_user'] = user['is_full_user']
+        session['pharmacy_display_name'] = user['pharmacy_display_name']
+        session['is_approved'] = user.get('is_approved', 1)
+        
+        return redirect(url_for('index'))
     
     return '''
     <!DOCTYPE html>
@@ -1001,10 +986,10 @@ def register():
         <h2>📝 ثبت‌نام</h2>
         <form method="post">
             <div class="field-label">نام کاربری *</div>
-            <input type="text" name="username" placeholder="حداقل 3 کاراکتر (انگلیسی/عدد)" required>
+            <input type="text" name="username" placeholder="حداقل 3 کاراکتر (هر زبانی)" required>
             
             <div class="field-label">رمز عبور *</div>
-            <input type="password" name="password" placeholder="حداقل 6 کاراکتر" required>
+            <input type="password" name="password" placeholder="حداقل 4 کاراکتر" required>
             
             <div class="field-label">تکرار رمز عبور *</div>
             <input type="password" name="confirm_password" placeholder="تکرار رمز عبور" required>
@@ -1112,7 +1097,7 @@ def exchange():
     pharmacies = cursor.fetchall()
     
     # بررسی وضعیت کاربر برای مخفی‌سازی نام
-    is_pending = session.get('is_approved', 0) == 0
+    is_pending = session.get('is_approved', 1) == 0
     
     pharmacy_options = ''
     for p in pharmacies:
@@ -1225,7 +1210,7 @@ def admin_panel():
         status_badge = ''
         if u['username'] == 'admin':
             status_badge = '<span class="badge badge-danger">ادمین</span>'
-        elif u.get('is_approved', 0) == 0:
+        elif u.get('is_approved', 1) == 0:
             status_badge = '<span class="badge badge-warning">⏳ در انتظار تأیید</span>'
         elif u['is_full_user']:
             status_badge = '<span class="badge badge-success">کاربر کامل</span>'
@@ -1234,7 +1219,7 @@ def admin_panel():
         
         actions = ''
         if u['username'] != 'admin':
-            if u.get('is_approved', 0) == 0:
+            if u.get('is_approved', 1) == 0:
                 actions += f'<button onclick="approveUser({u["id"]})" class="btn-success btn-sm">✅ تأیید</button> '
                 actions += f'<button onclick="rejectUser({u["id"]})" class="btn-danger btn-sm">❌ رد</button> '
             actions += f'<button onclick="deleteUser({u["id"]})" class="btn-danger btn-sm">🗑️</button>'
@@ -1313,7 +1298,7 @@ def admin_panel():
     
     <div class="card">
         <div class="card-title">🎙️ مدیریت مصاحبه‌ها</div>
-        <form method="post" action="/admin/add_interview" style="margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:12px;">
+        <form method="post" action="/admin/add_interview" style="margin-bottom:15px;padding:12px;background:#f8f9fa;border-radius:10px;">
             <div class="form-row">
                 <input type="text" name="pharmacist_name" placeholder="نام داروساز" required>
                 <input type="text" name="pharmacy_name" placeholder="نام داروخانه" required>
@@ -1340,7 +1325,7 @@ def admin_panel():
     
     <div class="card">
         <div class="card-title">📢 مدیریت اطلاعیه‌ها</div>
-        <form method="post" action="/admin/add_announcement" style="margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:12px;">
+        <form method="post" action="/admin/add_announcement" style="margin-bottom:15px;padding:12px;background:#f8f9fa;border-radius:10px;">
             <div class="form-row">
                 <input type="text" name="title" placeholder="عنوان اطلاعیه" required style="flex:1;">
                 <input type="text" name="content" placeholder="متن اطلاعیه" required style="flex:2;">
@@ -1550,7 +1535,7 @@ def api_get_current_user():
         'username': user['username'],
         'is_full_user': user['is_full_user'],
         'pharmacy_display_name': user['pharmacy_display_name'],
-        'is_approved': user.get('is_approved', 0)
+        'is_approved': user.get('is_approved', 1)
     })
 
 @app.route('/api/get_drugs')
@@ -1584,10 +1569,6 @@ def api_get_pharmacy_drugs():
     if not pharmacy_id:
         return jsonify({'drugs': []})
     
-    # بررسی دسترسی: کاربر باید تأیید شده باشد
-    if session.get('is_approved', 0) == 0:
-        return jsonify({'drugs': [], 'error': 'حساب کاربری شما تأیید نشده است'})
-    
     db = get_db()
     cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", (pharmacy_id,))
     return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
@@ -1600,7 +1581,7 @@ def api_get_all_pharmacies():
     pharmacies = cursor.fetchall()
     
     # مخفی‌سازی نام برای کاربران در انتظار تأیید
-    is_pending = session.get('is_approved', 0) == 0
+    is_pending = session.get('is_approved', 1) == 0
     result = []
     for p in pharmacies:
         name = p['pharmacy_display_name']
@@ -1669,6 +1650,355 @@ def register_sale():
     db.commit()
     return jsonify({'success': True})
 
+@app.route('/api/add_drug', methods=['POST'])
+@login_required
+def add_drug():
+    db = get_db()
+    user_id = session['user_id']
+    name = request.form['name']
+    quantity = int(request.form['quantity'])
+    drug_type = request.form['type']
+    priority = int(request.form['priority'])
+    db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at, ordered) VALUES (?, ?, ?, ?, ?, ?, ?)',
+               (user_id, name, quantity, drug_type, priority, datetime.now().isoformat(), 0))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/place_order', methods=['POST'])
+@login_required
+def place_order():
+    db = get_db()
+    user_id = session['user_id']
+    req = request.get_json()
+    selected_ids = req.get('selected_ids', [])
+    company = req.get('company')
+    quantities = req.get('quantities', {})
+    
+    if not selected_ids:
+        return jsonify({'success': False, 'error': 'هیچ دارویی انتخاب نشده است'})
+    
+    for drug_id in selected_ids:
+        cursor = db.execute("SELECT * FROM drugs WHERE id = ? AND user_id = ?", (drug_id, user_id))
+        drug = cursor.fetchone()
+        if drug:
+            qty = int(quantities.get(str(drug_id), drug['quantity']))
+            db.execute('INSERT INTO orders (user_id, company, drug_name, quantity, ordered_at) VALUES (?, ?, ?, ?, ?)',
+                      (user_id, company, drug['name'], qty, datetime.now().isoformat()))
+            if drug['type'] != 'quota':
+                db.execute("UPDATE drugs SET ordered = 1 WHERE id = ?", (drug_id,))
+    
+    db.execute("DELETE FROM drugs WHERE ordered = 1 AND user_id = ? AND type != 'quota'", (user_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/search_with_stock')
+@login_required
+def search_with_stock():
+    q = request.args.get('q', '')
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT DISTINCT name FROM inventory WHERE user_id = ? AND name LIKE ? LIMIT 10", (user_id, f'%{q}%'))
+    names = [row['name'] for row in cursor.fetchall()]
+    result = []
+    for name in names:
+        cursor = db.execute("SELECT SUM(quantity) as total FROM inventory WHERE user_id = ? AND name = ? AND location = 'warehouse'", (user_id, name))
+        warehouse_qty = cursor.fetchone()['total'] or 0
+        cursor = db.execute("SELECT SUM(quantity) as total FROM inventory WHERE user_id = ? AND name = ? AND location = 'pharmacy'", (user_id, name))
+        pharmacy_qty = cursor.fetchone()['total'] or 0
+        cursor = db.execute("SELECT expiry_date FROM inventory WHERE user_id = ? AND name = ? AND expiry_date IS NOT NULL AND expiry_date != '' ORDER BY expiry_date ASC LIMIT 1", (user_id, name))
+        nearest = cursor.fetchone()
+        result.append({'name': name, 'warehouse_qty': warehouse_qty, 'pharmacy_qty': pharmacy_qty, 'nearest_expiry': nearest['expiry_date'] if nearest else '-'})
+    return jsonify(result)
+
+@app.route('/api/add_inventory', methods=['POST'])
+@login_required
+def add_inventory():
+    db = get_db()
+    user_id = session['user_id']
+    name = request.form['name']
+    quantity = int(request.form['quantity'])
+    expiry_date = request.form['expiry_date']
+    location = request.form.get('location', 'warehouse')
+    supplier = request.form.get('supplier', '')
+    price_str = request.form.get('purchase_price', '0')
+    
+    if not expiry_date or not validate_expiry_date(expiry_date):
+        return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
+    
+    cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", (user_id, name, expiry_date, location))
+    existing = cursor.fetchone()
+    if existing:
+        db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, existing['id']))
+    else:
+        db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at, supplier, purchase_price)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (user_id, name, quantity, expiry_date, location, datetime.now().isoformat(), supplier, float(price_str) if price_str else 0))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/move_inventory', methods=['POST'])
+@login_required
+def move_inventory():
+    db = get_db()
+    user_id = session['user_id']
+    req = request.get_json()
+    name = req.get('name')
+    quantity = req.get('quantity')
+    from_location = req.get('from_location')
+    to_location = req.get('to_location')
+    expiry_date = req.get('expiry_date')
+    
+    if not expiry_date or not validate_expiry_date(expiry_date):
+        return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
+    
+    cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, name, from_location, expiry_date))
+    sources = cursor.fetchall()
+    total_available = sum(s['quantity'] for s in sources)
+    if total_available < quantity:
+        return jsonify({'success': False, 'error': f'موجودی ناکافی. فقط {total_available} عدد موجود است'})
+    
+    remaining = quantity
+    for source in sources:
+        if remaining <= 0:
+            break
+        take = min(source['quantity'], remaining)
+        if take > 0:
+            db.execute("UPDATE inventory SET quantity = quantity - ? WHERE id = ?", (take, source['id']))
+            if source['quantity'] - take == 0:
+                db.execute("DELETE FROM inventory WHERE id = ?", (source['id'],))
+            
+            cursor = db.execute("SELECT id FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", (user_id, name, expiry_date, to_location))
+            dest = cursor.fetchone()
+            if dest:
+                db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (take, dest['id']))
+            else:
+                db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
+                              VALUES (?, ?, ?, ?, ?, ?)''',
+                           (user_id, name, take, expiry_date, to_location, datetime.now().isoformat()))
+            remaining -= take
+    
+    db.commit()
+    return jsonify({'success': True})
+
+# ===== ثبت تبادل =====
+@app.route('/api/register_exchange', methods=['POST'])
+@login_required
+def register_exchange():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    
+    target_pharmacy_id = data.get('target_pharmacy_id')
+    my_items = data.get('my_items', [])
+    target_items = data.get('target_items', [])
+    
+    if not target_pharmacy_id:
+        return jsonify({'success': False, 'error': 'داروخانه هدف انتخاب نشده است'})
+    
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
+    sender = cursor.fetchone()
+    sender_name = sender['pharmacy_display_name'] if sender else 'داروخانه من'
+    
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (target_pharmacy_id,))
+    target = cursor.fetchone()
+    target_name = target['pharmacy_display_name'] if target else 'داروخانه هدف'
+    
+    # ثبت برای داروخانه هدف
+    for item in target_items:
+        db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)''',
+                   (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
+                    datetime.now().isoformat(), user_id, json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+    
+    # ثبت برای خود کاربر
+    for item in my_items:
+        db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)''',
+                   (user_id, target_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
+                    datetime.now().isoformat(), target_pharmacy_id, json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+    
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_exchanges')
+@login_required
+def get_exchanges():
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? ORDER BY exchange_date DESC", (user_id,))
+    return jsonify({'exchanges': [dict(row) for row in cursor.fetchall()]})
+
+@app.route('/api/get_pending_exchanges')
+@login_required
+def get_pending_exchanges():
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? AND status = 'pending' ORDER BY exchange_date DESC", (user_id,))
+    exchanges = [dict(row) for row in cursor.fetchall()]
+    # فیلتر برای تبادلات دریافتی
+    filtered = [e for e in exchanges if e.get('source_pharmacy_id') and e['source_pharmacy_id'] != user_id]
+    return jsonify({'exchanges': filtered})
+
+@app.route('/api/confirm_exchange/<int:exchange_id>', methods=['POST'])
+@login_required
+def confirm_exchange(exchange_id):
+    db = get_db()
+    user_id = session['user_id']
+    
+    cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
+    exchange = cursor.fetchone()
+    if not exchange:
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
+    
+    # دریافت آیتم‌ها
+    target_items = json.loads(exchange['target_items_json']) if exchange['target_items_json'] else []
+    my_items = json.loads(exchange['my_items_json']) if exchange['my_items_json'] else []
+    
+    # کم کردن از انبار کاربر (داروهایی که از شما خواسته)
+    for item in target_items:
+        drug_name = item.get('name')
+        expiry_date = item.get('expiry_date', '')
+        quantity = item.get('quantity')
+        
+        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0", (user_id, drug_name, expiry_date))
+        inv_items = cursor.fetchall()
+        
+        total_available = sum(i['quantity'] for i in inv_items)
+        if total_available < quantity:
+            return jsonify({'success': False, 'error': f'موجودی {drug_name} با تاریخ {expiry_date} کافی نیست'})
+        
+        remaining = quantity
+        for inv_item in inv_items:
+            if remaining <= 0:
+                break
+            take = min(inv_item['quantity'], remaining)
+            new_qty = inv_item['quantity'] - take
+            if new_qty == 0:
+                db.execute("DELETE FROM inventory WHERE id = ?", (inv_item['id'],))
+            else:
+                db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
+            remaining -= take
+    
+    # اضافه کردن به انبار کاربر (داروهایی که به شما می‌دهد)
+    for item in my_items:
+        drug_name = item.get('name')
+        expiry_date = item.get('expiry_date', '')
+        quantity = item.get('quantity')
+        
+        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = 'pharmacy'", (user_id, drug_name, expiry_date))
+        inv_item = cursor.fetchone()
+        if inv_item:
+            db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, inv_item['id']))
+        else:
+            db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
+                          VALUES (?, ?, ?, ?, ?, ?)''',
+                       (user_id, drug_name, quantity, expiry_date, 'pharmacy', datetime.now().isoformat()))
+    
+    db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
+    
+    # تایید تبادل مرتبط با طرف دیگر
+    db.execute("UPDATE exchanges SET status = 'confirmed' WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
+               (exchange.get('source_pharmacy_id'), user_id))
+    
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/reject_exchange/<int:exchange_id>', methods=['POST'])
+@login_required
+def reject_exchange(exchange_id):
+    db = get_db()
+    user_id = session['user_id']
+    
+    cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
+    exchange = cursor.fetchone()
+    if not exchange:
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
+    
+    db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
+    
+    # حذف تبادل مرتبط با طرف دیگر
+    if exchange.get('source_pharmacy_id'):
+        db.execute("DELETE FROM exchanges WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
+                   (exchange['source_pharmacy_id'], user_id))
+    
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_user_categories')
+@login_required
+def get_user_categories():
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    categories = row['categories'].split(',') if row and row['categories'] else []
+    return jsonify({'categories': categories})
+
+@app.route('/api/save_user_categories', methods=['POST'])
+@login_required
+def save_user_categories():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    categories = data.get('categories', [])
+    categories_str = ','.join(categories)
+    db.execute("INSERT OR REPLACE INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, categories_str))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_hidden_items')
+@login_required
+def get_hidden_items():
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
+    return jsonify({'hidden_ids': [row['item_id'] for row in cursor.fetchall()]})
+
+@app.route('/api/toggle_hidden_items', methods=['POST'])
+@login_required
+def toggle_hidden_items():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    item_ids = data.get('item_ids', [])
+    hidden = data.get('hidden', False)
+    
+    if hidden:
+        for item_id in item_ids:
+            db.execute("INSERT OR IGNORE INTO hidden_items (user_id, item_id) VALUES (?, ?)", (user_id, item_id))
+    else:
+        placeholders = ','.join('?' for _ in item_ids)
+        db.execute(f"DELETE FROM hidden_items WHERE user_id = ? AND item_id IN ({placeholders})", (user_id, *item_ids))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/get_inventory_grouped_by_expiry')
+@login_required
+def get_inventory_grouped_by_expiry():
+    db = get_db()
+    user_id = session['user_id']
+    
+    cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", (user_id,))
+    items = [dict(row) for row in cursor.fetchall()]
+    
+    expiry_groups = {}
+    for item in items:
+        expiry = item['expiry_date'] or 'نامشخص'
+        if expiry not in expiry_groups:
+            expiry_groups[expiry] = []
+        expiry_groups[expiry].append(item)
+    
+    result = []
+    for expiry_date, drugs in expiry_groups.items():
+        result.append({
+            'expiry_date': expiry_date,
+            'status_text': get_expiry_status(expiry_date)['text'],
+            'drugs': drugs
+        })
+    
+    result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
+    return jsonify({'data': result})
+
 # ===== اجرای برنامه =====
 if __name__ == '__main__':
     print("=" * 50)
@@ -1676,6 +2006,11 @@ if __name__ == '__main__':
     print("=" * 50)
     print("🌐 آدرس: http://0.0.0.0:5000")
     print("👑 ادمین: admin / admin123")
+    print("📝 کاربران نمونه:")
+    print("   nosratabadi / admin123")
+    print("   soleymani / soleymani123")
+    print("   A101 / drsaboori")
+    print("   A102 / drjafari")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
 EOF
