@@ -2,6 +2,7 @@ cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 # -*- coding: utf-8 -*-
 # ============================================
 # complete_pharmacy.py
+# بر اساس فایل Nosratabadi (2).txt با تغییرات جدید
 # ============================================
 import sqlite3
 import hashlib
@@ -471,7 +472,9 @@ HTML = '''<!DOCTYPE html>
         .topbar .nav-links .btn-login { background: #4fc3f7; color: #1a1a1a; padding: 3px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; }
         .topbar .nav-links .btn-login:hover { background: #81d4fa; }
         .topbar .nav-links .btn-register { background: #28a745; color: white; padding: 3px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; }
+        .topbar .nav-links .btn-register:hover { background: #34ce57; }
         .topbar .nav-links .btn-logout { background: #dc3545; color: white; padding: 3px 10px; border-radius: 6px; font-size: 12px; }
+        .topbar .nav-links .btn-logout:hover { background: #c82333; }
         .topbar .user-badge { background: #333; padding: 3px 10px; border-radius: 20px; font-size: 11px; color: #aaa; }
         .topbar .user-badge strong { color: white; }
         
@@ -578,7 +581,9 @@ HTML = '''<!DOCTYPE html>
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
+            transition: all 0.3s;
         }
+        button:hover { opacity: 0.85; }
         .btn-danger { background: #dc3545; }
         .btn-success { background: #28a745; }
         .btn-warning { background: #ffc107; color: #1a1a1a; }
@@ -625,14 +630,6 @@ HTML = '''<!DOCTYPE html>
         .deficit-table { width: 100%; border-collapse: collapse; }
         .deficit-table th, .deficit-table td { padding: 8px; text-align: center; border-bottom: 1px solid #eee; }
         .deficit-table th { background: #f0f0f0; font-weight: bold; }
-        
-        .expiry-picker { background: #f8f9fa; padding: 12px; border-radius: 10px; border: 1px solid #e0e0e0; }
-        .year-selector { display: flex; gap: 8px; margin-bottom: 10px; }
-        .year-btn { padding: 6px 16px; border: 2px solid #ddd; border-radius: 6px; background: white; cursor: pointer; font-weight: bold; font-size: 13px; }
-        .year-btn.active { border-color: #1a1a1a; background: #1a1a1a; color: white; }
-        .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
-        .month-btn { padding: 8px 4px; border: 1px solid #ddd; border-radius: 6px; background: white; cursor: pointer; font-size: 11px; text-align: center; }
-        .month-btn.selected { background: #1a1a1a; color: white; border-color: #1a1a1a; }
         
         .search-container { position: relative; flex: 1; }
         .suggestions-list {
@@ -714,14 +711,14 @@ HTML = '''<!DOCTYPE html>
         <a href="/" class="brand">💊 <span>دارو</span>خانه</a>
         <div class="nav-links">
             <a href="/">🏠 صفحه اصلی</a>
+            <a href="/dashboard">📊 داشبورد</a>
+            <a href="/inventory">📦 انبارداری</a>
+            <a href="/exchange">🔄 تبادل</a>
+            <a href="/deficit">📋 کسری</a>
+            {% if session.username == 'admin' %}
+                <a href="/admin" style="color:#ffc107;">👑 ادمین</a>
+            {% endif %}
             {% if session.logged_in %}
-                <a href="/dashboard">📊 داشبورد</a>
-                <a href="/inventory">📦 انبارداری</a>
-                <a href="/exchange">🔄 تبادل</a>
-                <a href="/deficit">📋 کسری</a>
-                {% if session.username == 'admin' %}
-                    <a href="/admin" style="color:#ffc107;">👑 ادمین</a>
-                {% endif %}
                 <span class="user-badge">👤 <strong>{{ session.pharmacy_display_name }}</strong></span>
                 <a href="/logout" class="btn-logout">🚪 خروج</a>
             {% else %}
@@ -734,17 +731,12 @@ HTML = '''<!DOCTYPE html>
     <div class="sidebar">
         <ul class="sidebar-menu">
             <li><a href="/"><span>🏠</span> <span class="menu-text">صفحه اصلی</span></a></li>
-            {% if session.logged_in %}
-                <li><a href="/dashboard"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
-                <li><a href="/inventory"><span>📦</span> <span class="menu-text">انبارداری</span></a></li>
-                <li><a href="/exchange"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
-                <li><a href="/deficit"><span>📋</span> <span class="menu-text">دفتر کسری</span></a></li>
-                {% if session.username == 'admin' %}
-                    <li><a href="/admin" class="admin-link"><span>👑</span> <span class="menu-text">پنل ادمین</span></a></li>
-                {% endif %}
-            {% else %}
-                <li><a href="/login"><span>🔐</span> <span class="menu-text">ورود</span></a></li>
-                <li><a href="/register"><span>📝</span> <span class="menu-text">ثبت‌نام</span></a></li>
+            <li><a href="/dashboard"><span>📊</span> <span class="menu-text">داشبورد</span></a></li>
+            <li><a href="/inventory"><span>📦</span> <span class="menu-text">انبارداری</span></a></li>
+            <li><a href="/exchange"><span>🔄</span> <span class="menu-text">تبادل دارو</span></a></li>
+            <li><a href="/deficit"><span>📋</span> <span class="menu-text">دفتر کسری</span></a></li>
+            {% if session.username == 'admin' %}
+                <li><a href="/admin" class="admin-link"><span>👑</span> <span class="menu-text">پنل ادمین</span></a></li>
             {% endif %}
         </ul>
     </div>
@@ -787,8 +779,8 @@ def index():
                 <div class="meta">👤 {i['pharmacist_name']} | 🏥 {i['pharmacy_name']} | 📅 {i['created_at'][:10]}</div>
                 <div class="content">{i['content']}</div>
                 <div class="media">
-                    {f'<img src="{i["image_url"]}" alt="{i["title"]}">' if i['image_url'] else ''}
-                    {f'<audio controls><source src="{i["audio_url"]}"></audio>' if i['audio_url'] else ''}
+                    {f'<img src="{i["image_url"]}" alt="{i["title"]}" style="max-width:100%;border-radius:6px;max-height:300px;">' if i['image_url'] else ''}
+                    {f'<audio controls style="width:100%;"><source src="{i["audio_url"]}"></audio>' if i['audio_url'] else ''}
                 </div>
             </div>
             '''
@@ -824,7 +816,7 @@ def login():
         user = cursor.fetchone()
         
         if user and user['password_hash'] == hash_password(password):
-            # بررسی وجود فیلد is_approved با try/except
+            # بررسی وجود فیلد is_approved
             try:
                 is_approved = user['is_approved']
             except (KeyError, IndexError):
@@ -955,6 +947,7 @@ def register():
         if cursor.fetchone()['count'] > 0:
             return '❌ این نام کاربری قبلاً ثبت شده است'
         
+        # ثبت کاربر جدید (is_approved = 1 یعنی تأیید شده)
         db.execute('''INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at, phone_number, address, is_approved)
                       VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
                    (username, hash_password(password), 0, pharmacy_name, datetime.now().isoformat(), phone_number, address))
@@ -974,6 +967,7 @@ def register():
         
         return redirect(url_for('index'))
     
+    # فرم ثبت‌نام
     return '''
     <!DOCTYPE html>
     <html dir="rtl" lang="fa">
@@ -1191,6 +1185,7 @@ def deficit():
 def admin_panel():
     db = get_db()
     
+    # آمار
     cursor = db.execute("SELECT COUNT(*) as count FROM users")
     total_users = cursor.fetchone()['count']
     
@@ -1203,12 +1198,15 @@ def admin_panel():
     cursor = db.execute("SELECT SUM(quantity) as total FROM inventory")
     total_inventory = cursor.fetchone()['total'] or 0
     
+    # لیست کاربران
     cursor = db.execute("SELECT * FROM users ORDER BY created_at DESC")
     users = cursor.fetchall()
     
+    # لیست مصاحبه‌ها
     cursor = db.execute("SELECT * FROM interviews ORDER BY created_at DESC")
     interviews = cursor.fetchall()
     
+    # لیست اطلاعیه‌ها
     cursor = db.execute("SELECT * FROM announcements ORDER BY created_at DESC")
     announcements = cursor.fetchall()
     
@@ -1692,10 +1690,14 @@ def register_sale():
 def add_drug():
     db = get_db()
     user_id = session['user_id']
-    name = request.form['name']
-    quantity = int(request.form['quantity'])
-    drug_type = request.form['type']
-    priority = int(request.form['priority'])
+    name = request.form.get('name')
+    quantity = int(request.form.get('quantity', 0))
+    drug_type = request.form.get('type', 'normal')
+    priority = int(request.form.get('priority', 4))
+    
+    if not name or quantity <= 0:
+        return jsonify({'success': False, 'error': 'نام و تعداد معتبر وارد کنید'})
+    
     db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at, ordered) VALUES (?, ?, ?, ?, ?, ?, ?)',
                (user_id, name, quantity, drug_type, priority, datetime.now().isoformat(), 0))
     db.commit()
@@ -1752,14 +1754,17 @@ def search_with_stock():
 def add_inventory():
     db = get_db()
     user_id = session['user_id']
-    name = request.form['name']
-    quantity = int(request.form['quantity'])
-    expiry_date = request.form['expiry_date']
+    name = request.form.get('name')
+    quantity = int(request.form.get('quantity', 0))
+    expiry_date = request.form.get('expiry_date')
     location = request.form.get('location', 'warehouse')
     supplier = request.form.get('supplier', '')
     price_str = request.form.get('purchase_price', '0')
     
-    if not expiry_date or not validate_expiry_date(expiry_date):
+    if not name or quantity <= 0 or not expiry_date:
+        return jsonify({'success': False, 'error': 'نام، تعداد و تاریخ انقضا اجباری است'})
+    
+    if not validate_expiry_date(expiry_date):
         return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
     
     cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", (user_id, name, expiry_date, location))
@@ -1785,7 +1790,10 @@ def move_inventory():
     to_location = req.get('to_location')
     expiry_date = req.get('expiry_date')
     
-    if not expiry_date or not validate_expiry_date(expiry_date):
+    if not name or not quantity or not expiry_date:
+        return jsonify({'success': False, 'error': 'نام، تعداد و تاریخ انقضا اجباری است'})
+    
+    if not validate_expiry_date(expiry_date):
         return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
     
     cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, name, from_location, expiry_date))
