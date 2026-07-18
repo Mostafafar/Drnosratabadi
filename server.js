@@ -42,6 +42,8 @@ function getCurrentDate() {
 }
 
 // ========== مقداردهی اولیه دیتابیس ==========
+
+
 function initDB() {
     db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,15 +81,9 @@ function initDB() {
         user_id INTEGER NOT NULL,
         name TEXT NOT NULL,
         quantity INTEGER NOT NULL,
-        batch_number TEXT,
         expiry_date TEXT,
-        manufacturer TEXT,
         location TEXT,
         created_at TEXT,
-        invoice_number TEXT,
-        supplier TEXT,
-        purchase_price REAL,
-        category TEXT DEFAULT 'other',
         FOREIGN KEY (user_id) REFERENCES users(id)
     )`);
 
@@ -98,7 +94,6 @@ function initDB() {
         quantity INTEGER NOT NULL,
         sale_date TEXT,
         expiry_date TEXT,
-        invoice_number TEXT,
         customer_name TEXT,
         price REAL,
         location TEXT,
@@ -121,29 +116,7 @@ function initDB() {
         location TEXT,
         exchange_date TEXT NOT NULL,
         status TEXT DEFAULT 'pending',
-        batch_number TEXT,
-        invoice_number TEXT,
         target_pharmacy_id INTEGER DEFAULT NULL,
-        category TEXT DEFAULT 'other',
-        sender_categories TEXT DEFAULT '',
-        my_items_json TEXT DEFAULT '',
-        target_items_json TEXT DEFAULT '',
-        source_pharmacy_id INTEGER DEFAULT NULL,
-        source_pharmacy_name TEXT DEFAULT '',
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS user_categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL UNIQUE,
-        categories TEXT DEFAULT '',
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS hidden_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        item_id INTEGER NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )`);
 
@@ -153,19 +126,39 @@ function initDB() {
         pharmacy_name TEXT NOT NULL,
         title TEXT NOT NULL,
         content TEXT NOT NULL,
-        image_url TEXT DEFAULT '',
         created_at TEXT NOT NULL,
-        is_published INTEGER DEFAULT 1,
-        views INTEGER DEFAULT 0
+        is_published INTEGER DEFAULT 1
     )`);
 
-    db.run(`CREATE TABLE IF NOT EXISTS announcements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        is_active INTEGER DEFAULT 1
-    )`);
+    // ایجاد شرکت‌های پیش‌فرض
+    const companies = ['داروپخش', 'البرز', 'اکسیر', 'رازی'];
+    companies.forEach(c => {
+        db.run("INSERT OR IGNORE INTO companies (name) VALUES (?)", [c]);
+    });
+
+    const users = [
+        { username: 'admin', password: 'admin123', display: 'مدیر سیستم', is_full: 1 },
+        { username: 'nosratabadi', password: 'admin123', display: 'داروخانه نصرت‌آبادی', is_full: 1 }
+    ];
+
+    users.forEach(u => {
+        db.get("SELECT COUNT(*) as count FROM users WHERE username = ?", [u.username], (err, row) => {
+            if (!err && row.count === 0) {
+                db.run("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                    [u.username, hashPassword(u.password), u.is_full, u.display, getCurrentDate()]);
+            }
+        });
+    });
+
+    db.get("SELECT COUNT(*) as count FROM interviews", (err, row) => {
+        if (!err && row.count === 0) {
+            db.run(`INSERT INTO interviews (pharmacist_name, pharmacy_name, title, content, created_at, is_published)
+                    VALUES (?, ?, ?, ?, ?, ?)`,
+                ['دکتر محمد رضایی', 'داروخانه مرکزی', 'نقش داروساز در جامعه مدرن',
+                'داروسازان امروز فراتر از یک توزیع‌کننده دارو هستند.', getCurrentDate(), 1]);
+        }
+    });
+}
 
     // ===== ایجاد کاربران پیش‌فرض =====
     const users = [
