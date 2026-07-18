@@ -6,8 +6,9 @@ cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 import sqlite3
 import hashlib
 import json
-from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, session, redirect, url_for, g, send_from_directory, render_template_string
+from datetime import datetime, timedelta
+send_from_directory, render_template_string
 from functools import wraps
 import os
 import base64
