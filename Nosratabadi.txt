@@ -3,6 +3,7 @@ cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 # ============================================
 # complete_pharmacy.py
 # سیستم مدیریت داروخانه با تمام امکانات
+# نسخه اصلاح شده - فروردین 1405
 # ============================================
 import sqlite3
 import hashlib
@@ -14,9 +15,10 @@ import os
 import base64
 import re
 import uuid
+import sys
 
 app = Flask(__name__)
-app.secret_key = 'pharmacy-secret-key-2024'
+app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-secret-key-2024')
 app.config['JSON_AS_ASCII'] = False
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
@@ -99,9 +101,12 @@ def hash_password(password):
 def get_current_user_from_session():
     if not session.get('user_id'):
         return None
+    if hasattr(g, 'current_user'):
+        return g.current_user
     db = get_db()
     cursor = db.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],))
-    return cursor.fetchone()
+    g.current_user = cursor.fetchone()
+    return g.current_user
 
 def validate_expiry_date(date_str):
     if not date_str or date_str.strip() == '':
@@ -110,7 +115,7 @@ def validate_expiry_date(date_str):
     return re.match(pattern, date_str) is not None
 
 def parse_expiry_number(expiry_str):
-    if not expiry_str or expiry_str == '':
+    if not expiry_str or expiry_str is None or expiry_str == '':
         return 999999
     try:
         if '.' in expiry_str:
@@ -123,7 +128,7 @@ def parse_expiry_number(expiry_str):
     return 999999
 
 def get_expiry_status(expiry_date):
-    if not expiry_date:
+    if not expiry_date or expiry_date == '':
         return {'text': 'نامشخص', 'class': ''}
     try:
         if '.' in expiry_date:
@@ -147,12 +152,19 @@ def get_expiry_status(expiry_date):
         return {'text': 'نامعتبر', 'class': ''}
 
 def mask_pharmacy_name(name):
-    """مخفی‌سازی نام داروخانه برای کاربران مهمان"""
-    if not name:
+    if not name or len(name) <= 4:
         return name
-    if len(name) <= 6:
-        return name
-    return name[:6] + '......' + name[-1] if len(name) > 7 else name[:3] + '......' + name[-1]
+    return name[:3] + '...' + name[-2:]
+
+def cleanup_expired_items():
+    """پاکسازی داروهای منقضی از انبار"""
+    db = get_db()
+    try:
+        # حذف داروهای منقضی
+        db.execute("DELETE FROM inventory WHERE expiry_date IS NOT NULL AND expiry_date != '' AND substr(expiry_date, 1, 4) || substr(expiry_date, 6, 2) < strftime('%Y%m', 'now')")
+        db.commit()
+    except:
+        pass
 
 def init_db():
     db = get_db()
@@ -357,6 +369,14 @@ def init_db():
             db.execute("INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at, is_approved) VALUES (?, ?, ?, ?, ?, ?)",
                        (username, hash_password(password), is_full, display, datetime.now().isoformat(), 1))
     
+    # ===== ایجاد user_categories برای همه کاربران =====
+    cursor = db.execute("SELECT id FROM users")
+    all_users = cursor.fetchall()
+    for u in all_users:
+        cursor2 = db.execute("SELECT COUNT(*) as count FROM user_categories WHERE user_id = ?", (u['id'],))
+        if cursor2.fetchone()['count'] == 0:
+            db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (u['id'], ''))
+    
     # ===== ایجاد شرکت‌ها =====
     companies = ['داروپخش', 'البرز', 'اکسیر', 'رازی']
     for c in companies:
@@ -388,11 +408,9 @@ def init_db():
                     db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
                                   VALUES (?, ?, ?, ?, ?, ?)''',
                                (user_id, name, qty, expiry, loc, datetime.now().isoformat()))
-            
-            cursor = db.execute("SELECT COUNT(*) as count FROM user_categories WHERE user_id = ?", (user_id,))
-            if cursor.fetchone()['count'] == 0:
-                db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (user_id, ''))
     
+    # پاکسازی داروهای منقضی
+    cleanup_expired_items()
     db.commit()
 
 with app.app_context():
@@ -680,6 +698,25 @@ HTML = '''<!DOCTYPE html>
         .location-warehouse { background: #cfe2ff; color: #084298; }
         .location-pharmacy { background: #d1e7dd; color: #0a3622; }
         
+        .toast-message {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1a1a1a;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 10px;
+            z-index: 99999;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            max-width: 90%;
+            display: none;
+        }
+        .toast-message.success { background: #28a745; }
+        .toast-message.error { background: #dc3545; }
+        .toast-message.info { background: #17a2b8; }
+        
         @media (max-width: 768px) {
             .sidebar { width: 55px; }
             .sidebar .menu-text { display: none; }
@@ -692,6 +729,7 @@ HTML = '''<!DOCTYPE html>
     </style>
 </head>
 <body>
+    <div id="toast" class="toast-message"></div>
     <div class="topbar">
         <a href="/" class="brand">💊 <span>دارو</span>خانه</a>
         <div class="nav-links">
@@ -739,6 +777,18 @@ HTML = '''<!DOCTYPE html>
         </div>
         {{ content|safe }}
     </div>
+    
+    <script>
+        function showToast(message, type) {
+            var toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast-message ' + (type || 'info');
+            toast.style.display = 'block';
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+    </script>
 </body>
 </html>'''
 
@@ -822,6 +872,29 @@ def login():
                 <div class="login-box">
                     <h2>🏥 ورود</h2>
                     <div class="warning">⏳ حساب کاربری شما در انتظار تأیید ادمین است.</div>
+                    <a href="/" class="back-link">← بازگشت به صفحه اصلی</a>
+                </div>
+                </body>
+                </html>
+                '''
+            
+            if is_approved == 2:
+                return '''
+                <!DOCTYPE html>
+                <html dir="rtl" lang="fa">
+                <head><meta charset="UTF-8"><title>ورود</title>
+                <style>
+                    body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                    .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+                    .login-box h2 { margin-bottom: 20px; color: #1a1a1a; }
+                    .warning { color: #721c24; margin-top: 10px; font-size: 13px; background: #f8d7da; padding: 10px; border-radius: 8px; }
+                    .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+                </style>
+                </head>
+                <body>
+                <div class="login-box">
+                    <h2>🏥 ورود</h2>
+                    <div class="warning">❌ حساب کاربری شما رد شده است. با ادمین تماس بگیرید.</div>
                     <a href="/" class="back-link">← بازگشت به صفحه اصلی</a>
                 </div>
                 </body>
@@ -929,22 +1002,39 @@ def register():
             return '❌ این نام کاربری قبلاً ثبت شده است'
         
         db.execute('''INSERT INTO users (username, password_hash, is_full_user, pharmacy_display_name, created_at, phone_number, address, is_approved)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 0)''',
                    (username, hash_password(password), 0, pharmacy_name, datetime.now().isoformat(), phone_number, address))
         db.commit()
         
-        cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
+        # ایجاد user_categories برای کاربر جدید
+        cursor = db.execute("SELECT id FROM users WHERE username = ?", (username,))
         user = cursor.fetchone()
+        if user:
+            db.execute("INSERT INTO user_categories (user_id, categories) VALUES (?, ?)", (user['id'], ''))
+            db.commit()
         
-        session.clear()
-        session['logged_in'] = True
-        session['user_id'] = user['id']
-        session['username'] = user['username']
-        session['is_full_user'] = user['is_full_user']
-        session['pharmacy_display_name'] = user['pharmacy_display_name']
-        session['is_approved'] = 1
-        
-        return redirect(url_for('index'))
+        return '''
+        <!DOCTYPE html>
+        <html dir="rtl" lang="fa">
+        <head><meta charset="UTF-8"><title>ثبت‌نام</title>
+        <style>
+            body { font-family: Tahoma, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 380px; text-align: center; }
+            .box h2 { margin-bottom: 20px; color: #28a745; }
+            .box p { color: #555; line-height: 1.8; }
+            .back-link { display: block; margin-top: 15px; color: #007bff; text-decoration: none; }
+        </style>
+        </head>
+        <body>
+        <div class="box">
+            <h2>✅ ثبت‌نام موفق</h2>
+            <p>حساب کاربری شما با موفقیت ایجاد شد.<br>
+            پس از تأیید توسط ادمین، می‌توانید وارد شوید.</p>
+            <a href="/" class="back-link">← بازگشت به صفحه اصلی</a>
+        </div>
+        </body>
+        </html>
+        '''
     
     return '''
     <!DOCTYPE html>
@@ -999,6 +1089,11 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
+# ===== ادامه در بخش بعدی =====
+EOF
+
+cat >> /var/www/poldaroo/complete_pharmacy.py << 'EOF'
+
 # ===== داشبورد =====
 @app.route('/dashboard')
 @login_required
@@ -1018,7 +1113,6 @@ def dashboard():
     cursor = db.execute("SELECT COUNT(*) as count FROM exchanges WHERE user_id = ?", (user_id,))
     total_exchanges = cursor.fetchone()['count']
     
-    # دریافت لیست داروهای کسری برای دستیار خرید
     cursor = db.execute("SELECT * FROM drugs WHERE user_id = ? AND ordered = 0 ORDER BY priority ASC, created_at DESC", (user_id,))
     drugs = cursor.fetchall()
     
@@ -1038,7 +1132,6 @@ def dashboard():
         else:
             normal_html += drug_html
     
-    # دریافت سفارشات
     cursor = db.execute("SELECT * FROM orders WHERE user_id = ? ORDER BY ordered_at DESC", (user_id,))
     orders = cursor.fetchall()
     
@@ -1119,6 +1212,16 @@ def dashboard():
     </div>
     
     <script>
+    function showToast(message, type) {{
+        var toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast-message ' + (type || 'info');
+        toast.style.display = 'block';
+        setTimeout(function() {{
+            toast.style.display = 'none';
+        }}, 3000);
+    }}
+    
     function showDashboardTab(tab) {{
         document.querySelectorAll('#assistantTab, #ordersTab').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.dashboard-tab button').forEach(btn => btn.classList.remove('active'));
@@ -1139,10 +1242,21 @@ def dashboard():
             qty[id] = document.querySelector('.qty-'+id).value;
         }});
         let company = document.getElementById('company').value;
-        if(!company){{ alert('شرکت را انتخاب کنید'); return; }}
-        if(ids.length==0){{ alert('حداقل یک دارو انتخاب کنید'); return; }}
+        if(!company){{ showToast('شرکت را انتخاب کنید', 'error'); return; }}
+        if(ids.length==0){{ showToast('حداقل یک دارو انتخاب کنید', 'error'); return; }}
         fetch('/api/place_order', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{selected_ids:ids, company:company, quantities:qty}}) }})
-            .then(() => location.reload());
+            .then(r=>r.json())
+            .then(data=>{{
+                if(data.success) {{
+                    showToast('✅ سفارش با موفقیت ثبت شد', 'success');
+                    location.reload();
+                }} else {{
+                    showToast('❌ خطا: ' + data.error, 'error');
+                }}
+            }})
+            .catch(err => {{
+                showToast('❌ خطا در ارتباط با سرور', 'error');
+            }});
     }}
     
     document.getElementById('companyFilter').addEventListener('change', function() {{
@@ -1264,6 +1378,16 @@ def inventory():
     let showHidden = false;
     let hiddenIds = new Set();
     
+    function showToast(message, type) {{
+        var toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast-message ' + (type || 'info');
+        toast.style.display = 'block';
+        setTimeout(function() {{
+            toast.style.display = 'none';
+        }}, 3000);
+    }}
+    
     function loadHiddenItems() {{
         fetch('/api/get_hidden_items')
             .then(r => r.json())
@@ -1274,7 +1398,7 @@ def inventory():
             .catch(() => {{ hiddenIds = new Set(); renderInventory(); }});
     }}
     
-    function validateExpiry(expiry) {{
+    function validateExpiryFormat(expiry) {{
         return /^\\d{4}\\.(0[1-9]|1[0-2])$/.test(expiry);
     }}
     
@@ -1316,16 +1440,16 @@ def inventory():
         document.querySelectorAll('.drug-item .item-checkbox:checked').forEach(cb => {{
             ids.push(parseInt(cb.dataset.id));
         }});
-        if(ids.length === 0) {{ alert('هیچ آیتمی انتخاب نشده است'); return; }}
+        if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
         if(!confirm(ids.length + ' آیتم هاید شود؟')) return;
         fetch('/api/toggle_hidden_items', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{item_ids: ids, hidden: true}})
         }}).then(r=>r.json()).then(data=>{{
-            if(data.success) {{ alert('✅ هاید شد'); loadInventory(); }}
-            else {{ alert('خطا: ' + data.error); }}
-        }});
+            if(data.success) {{ showToast('✅ هاید شد', 'success'); loadInventory(); }}
+            else {{ showToast('خطا: ' + data.error, 'error'); }}
+        }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function unhideSelectedItems() {{
@@ -1333,38 +1457,48 @@ def inventory():
         document.querySelectorAll('.drug-item .item-checkbox:checked').forEach(cb => {{
             ids.push(parseInt(cb.dataset.id));
         }});
-        if(ids.length === 0) {{ alert('هیچ آیتمی انتخاب نشده است'); return; }}
+        if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
         if(!confirm(ids.length + ' آیتم unhide شود؟')) return;
         fetch('/api/toggle_hidden_items', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{item_ids: ids, hidden: false}})
         }}).then(r=>r.json()).then(data=>{{
-            if(data.success) {{ alert('✅ unhide شد'); loadInventory(); }}
-            else {{ alert('خطا: ' + data.error); }}
-        }});
+            if(data.success) {{ showToast('✅ unhide شد', 'success'); loadInventory(); }}
+            else {{ showToast('خطا: ' + data.error, 'error'); }}
+        }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function exportToTelegram() {{
-        var text = "📦 گزارش انبار\\n📅 " + new Date().toLocaleDateString('fa-IR') + "\\n─────────────────────\\n";
-        inventoryData.forEach(tab => {{
-            text += "\\n📅 " + tab.expiry_date + " " + tab.status_text + "\\n";
-            tab.pharmacies.forEach(ph => {{
-                text += "  🏥 " + ph.pharmacy_name + "\\n";
-                ph.drugs.forEach(d => {{
-                    if(!d.hidden || showHidden) {{
-                        text += "    • " + d.name + ": " + d.quantity + " عدد (" + (d.location === 'warehouse' ? 'انبار' : 'داروخانه') + ")" + (d.hidden ? " [هاید]" : "") + "\\n";
-                    }}
+        try {{
+            var text = "📦 گزارش انبار\\n📅 " + new Date().toLocaleDateString('fa-IR') + "\\n─────────────────────\\n";
+            inventoryData.forEach(tab => {{
+                if(!tab || !tab.pharmacies) return;
+                text += "\\n📅 " + tab.expiry_date + " " + (tab.status_text || '') + "\\n";
+                tab.pharmacies.forEach(ph => {{
+                    if(!ph || !ph.drugs) return;
+                    text += "  🏥 " + ph.pharmacy_name + "\\n";
+                    ph.drugs.forEach(d => {{
+                        if((!d.hidden || showHidden) && d.name) {{
+                            text += "    • " + d.name + ": " + d.quantity + " عدد (" + (d.location === 'warehouse' ? 'انبار' : 'داروخانه') + ")" + (d.hidden ? " [هاید]" : "") + "\\n";
+                        }}
+                    }});
                 }});
             }});
-        }});
-        var textarea = document.createElement('textarea');
-        textarea.value = text;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        alert('✅ متن در کلیپبورد کپی شد');
+            if(text.length > 5000) {{
+                showToast('گزارش بیش از حد بزرگ است', 'error');
+                return;
+            }}
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            showToast('✅ متن در کلیپبورد کپی شد', 'success');
+        }} catch(e) {{
+            showToast('❌ خطا در تولید گزارش', 'error');
+        }}
     }}
     
     function renderInventory() {{
@@ -1449,6 +1583,7 @@ def inventory():
             .catch(err => {{
                 console.error('Error:', err);
                 document.getElementById('inventoryContainer').innerHTML = '<p style="text-align:center;padding:40px;color:#dc3545">❌ خطا در بارگذاری</p>';
+                showToast('❌ خطا در بارگذاری انبار', 'error');
             }});
     }}
     
@@ -1466,7 +1601,8 @@ def inventory():
                     suggestions.innerHTML = html;
                     suggestions.style.display = 'block';
                 }} else {{ suggestions.style.display = 'none'; }}
-            }});
+            }})
+            .catch(() => {{ suggestions.style.display = 'none'; }});
     }}
     
     function searchDrugsForSale(query) {{
@@ -1483,7 +1619,8 @@ def inventory():
                     suggestions.innerHTML = html;
                     suggestions.style.display = 'block';
                 }} else {{ suggestions.style.display = 'none'; }}
-            }});
+            }})
+            .catch(() => {{ suggestions.style.display = 'none'; }});
     }}
     
     function searchDrugsMove(query) {{
@@ -1500,23 +1637,20 @@ def inventory():
                     suggestions.innerHTML = html;
                     suggestions.style.display = 'block';
                 }} else {{ suggestions.style.display = 'none'; }}
-            }});
+            }})
+            .catch(() => {{ suggestions.style.display = 'none'; }});
     }}
     
     function selectDrugInv(name) {{ document.getElementById('invName').value = name; document.getElementById('suggestionsInv').style.display = 'none'; }}
     function selectDrugForSale(name) {{ document.getElementById('saleDrugName').value = name; document.getElementById('suggestionsSale').style.display = 'none'; }}
     function selectDrugMove(name) {{ document.getElementById('moveDrug').value = name; document.getElementById('suggestionsMove').style.display = 'none'; }}
     
-    function validateExpiryFormat(expiry) {{
-        return /^\\d{4}\\.(0[1-9]|1[0-2])$/.test(expiry);
-    }}
-    
     function addInventory() {{
         var name = document.getElementById('invName').value;
         var qty = document.getElementById('invQty').value;
         var expiry = document.getElementById('expiryDate').value;
-        if(!name || !qty || !expiry) {{ alert('نام دارو، تعداد و تاریخ انقضا اجباری است'); return; }}
-        if(!validateExpiryFormat(expiry)) {{ alert('❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'); return; }}
+        if(!name || !qty || !expiry) {{ showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error'); return; }}
+        if(!validateExpiryFormat(expiry)) {{ showToast('❌ فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)', 'error'); return; }}
         var fd = new FormData();
         fd.append('name', name);
         fd.append('quantity', qty);
@@ -1524,21 +1658,41 @@ def inventory():
         fd.append('location', document.getElementById('location').value);
         fd.append('supplier', document.getElementById('supplier').value);
         fd.append('purchase_price', document.getElementById('price').value);
-        fetch('/api/add_inventory', {{method:'POST', body:fd}}).then(r=>r.json()).then(data=>{{ if(data.success) {{ alert('✅ دارو ثبت شد'); location.reload(); }} else {{ alert('خطا: ' + data.error); }} }});
+        fetch('/api/add_inventory', {{method:'POST', body:fd}})
+            .then(r=>r.json())
+            .then(data=>{{ 
+                if(data.success) {{ 
+                    showToast('✅ دارو ثبت شد', 'success'); 
+                    location.reload(); 
+                }} else {{ 
+                    showToast('خطا: ' + data.error, 'error'); 
+                }} 
+            }})
+            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function registerSale() {{
         var name = document.getElementById('saleDrugName').value;
         var qty = document.getElementById('saleQty').value;
         var expiry = document.getElementById('saleExpiry').value;
-        if(!name || !qty || !expiry) {{ alert('نام دارو، تعداد و تاریخ انقضا اجباری است'); return; }}
-        if(!validateExpiryFormat(expiry)) {{ alert('❌ فرمت تاریخ انقضا نامعتبر است'); return; }}
+        if(!name || !qty || !expiry) {{ showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error'); return; }}
+        if(!validateExpiryFormat(expiry)) {{ showToast('❌ فرمت تاریخ انقضا نامعتبر است', 'error'); return; }}
         fetch('/api/register_sale', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{
             drug_name: name, quantity: parseInt(qty), expiry_date: expiry,
             customer_name: document.getElementById('customerName').value,
             price: parseFloat(document.getElementById('salePrice').value) || 0,
             location: document.getElementById('saleLocation').value
-        }}) }}).then(r=>r.json()).then(res => {{ if(res.success) {{ alert('✅ فروش ثبت شد'); location.reload(); }} else {{ alert('خطا: ' + res.error); }} }});
+        }}) }})
+        .then(r=>r.json())
+        .then(res => {{ 
+            if(res.success) {{ 
+                showToast('✅ فروش ثبت شد', 'success'); 
+                location.reload(); 
+            }} else {{ 
+                showToast('خطا: ' + res.error, 'error'); 
+            }} 
+        }})
+        .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function moveDrug() {{
@@ -1547,10 +1701,19 @@ def inventory():
         var fromLoc = document.getElementById('moveFromLocation').value;
         var toLoc = document.getElementById('moveToLocation').value;
         var expiry = document.getElementById('moveExpiry').value;
-        if(!name || !qty || !expiry){{ alert('نام دارو، تعداد و تاریخ انقضا را وارد کنید'); return; }}
-        if(!validateExpiryFormat(expiry)) {{ alert('❌ فرمت تاریخ انقضا نامعتبر است'); return; }}
+        if(!name || !qty || !expiry){{ showToast('نام دارو، تعداد و تاریخ انقضا را وارد کنید', 'error'); return; }}
+        if(!validateExpiryFormat(expiry)) {{ showToast('❌ فرمت تاریخ انقضا نامعتبر است', 'error'); return; }}
         fetch('/api/move_inventory', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{name:name, quantity:parseInt(qty), from_location:fromLoc, to_location:toLoc, expiry_date:expiry}}) }})
-            .then(r=>r.json()).then(data=>{{ if(data.success) {{ alert('✅ انتقال انجام شد'); location.reload(); }} else {{ alert('خطا: '+data.error); }} }});
+            .then(r=>r.json())
+            .then(data=>{{ 
+                if(data.success) {{ 
+                    showToast('✅ انتقال انجام شد', 'success'); 
+                    location.reload(); 
+                }} else {{ 
+                    showToast('خطا: '+data.error, 'error'); 
+                }} 
+            }})
+            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     document.addEventListener('click', function(e) {{
@@ -1564,7 +1727,11 @@ def inventory():
     '''
     return render_template_string(HTML, content=content, page_title='📦 انبارداری', session=session)
 
-# ===== ادامه کد در پاسخ بعدی =====
+# ===== ادامه در بخش بعدی =====
+EOF
+
+cat >> /var/www/poldaroo/complete_pharmacy.py << 'EOF'
+
 # ===== تبادل دارو =====
 @app.route('/exchange')
 @login_required
@@ -1572,7 +1739,6 @@ def exchange():
     db = get_db()
     user_id = session['user_id']
     
-    # دریافت لیست داروخانه‌ها
     cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ?", (user_id,))
     pharmacies = cursor.fetchall()
     
@@ -1580,7 +1746,6 @@ def exchange():
     for p in pharmacies:
         pharmacy_options += f'<option value="{p["id"]}">{p["pharmacy_display_name"]}</option>'
     
-    # دریافت دسته‌بندی کاربر
     cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     user_categories = row['categories'].split(',') if row and row['categories'] else []
@@ -1664,6 +1829,7 @@ def exchange():
     </div>
     
     <script>
+    const USER_ID = {user_id};
     var selectedTargetPharmacy = null;
     var selectedTargetPharmacyName = '';
     var myDrugs = [];
@@ -1674,11 +1840,21 @@ def exchange():
     var exchangeAllDrugsData = [];
     var hiddenIds = new Set();
     
+    function showToast(message, type) {{
+        var toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast-message ' + (type || 'info');
+        toast.style.display = 'block';
+        setTimeout(function() {{
+            toast.style.display = 'none';
+        }}, 3000);
+    }}
+    
     function loadHiddenItems() {{
         fetch('/api/get_hidden_items').then(r=>r.json()).then(data=>{{
             hiddenIds = new Set(data.hidden_ids || []);
             renderExchangeAllDrugs();
-        }});
+        }}).catch(()=>{{ hiddenIds = new Set(); renderExchangeAllDrugs(); }});
     }}
     
     function loadUserCategories() {{
@@ -1687,7 +1863,7 @@ def exchange():
             document.querySelectorAll('#categoryCheckboxes input').forEach(cb => {{
                 cb.checked = userCategories.includes(cb.value);
             }});
-        }});
+        }}).catch(()=>{{}});
     }}
     
     function saveUserCategories() {{
@@ -1701,12 +1877,12 @@ def exchange():
             body: JSON.stringify({{categories: categories}})
         }}).then(r=>r.json()).then(data=>{{
             if(data.success) {{
-                alert('✅ دسته‌بندی مصرفی ذخیره شد');
+                showToast('✅ دسته‌بندی مصرفی ذخیره شد', 'success');
                 userCategories = categories;
             }} else {{
-                alert('خطا: ' + data.error);
+                showToast('خطا: ' + data.error, 'error');
             }}
-        }});
+        }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function getExpiryStatusText(expiryDate) {{
@@ -1750,6 +1926,7 @@ def exchange():
             .catch(err => {{
                 console.error('Error:', err);
                 container.innerHTML = '<div style="text-align:center;padding:20px;color:#dc3545">❌ خطا در بارگذاری</div>';
+                showToast('❌ خطا در بارگذاری', 'error');
             }});
     }}
     
@@ -1765,7 +1942,6 @@ def exchange():
             );
         }});
         
-        // فیلتر بر اساس داروخانه هدف
         if(targetPharmacy !== 'all') {{
             filtered = filtered.map(tab => {{
                 var newPh = tab.pharmacies.filter(ph => ph.pharmacy_id == targetPharmacy);
@@ -1796,7 +1972,7 @@ def exchange():
                 var visibleDrugs = ph.drugs.filter(d => !hiddenIds.has(d.id) && d.name.toLowerCase().includes(filter));
                 if(visibleDrugs.length === 0) return;
                 var isPhOpen = phIdx === 0 ? 'show' : '';
-                var isMyPharmacy = ph.pharmacy_id == sessionStorage.getItem('userId');
+                var isMyPharmacy = ph.pharmacy_id == USER_ID;
                 html += '<div class="pharmacy-group">';
                 html += '<div class="pharmacy-group-header" onclick="toggleExchangePharmacyGroup(this)">';
                 html += '<span>🏥 ' + ph.pharmacy_name + (isMyPharmacy ? ' (من)' : '') + '</span>';
@@ -1830,16 +2006,14 @@ def exchange():
     function toggleExchangePharmacyGroup(header) {{ var body = header.nextElementSibling; body.classList.toggle('show'); }}
     
     function selectDrugFromExchange(pharmacyId, pharmacyName, drugName, quantity, expiryDate, drugId) {{
-        var userId = parseInt(sessionStorage.getItem('userId'));
-        
-        if(selectedTargetPharmacy !== null && selectedTargetPharmacy !== pharmacyId && pharmacyId != userId) {{
-            alert('❌ شما نمی‌توانید از دو داروخانه مختلف به طور همزمان انتخاب کنید.');
+        if(selectedTargetPharmacy !== null && selectedTargetPharmacy !== pharmacyId && pharmacyId != USER_ID) {{
+            showToast('❌ شما نمی‌توانید از دو داروخانه مختلف به طور همزمان انتخاب کنید.', 'error');
             return;
         }}
         
-        if(pharmacyId == userId) {{
-            if(selectedTargetPharmacy !== null && selectedTargetPharmacy != userId) {{
-                alert('❌ شما در حال انتخاب از داروهای خود هستید، اما قبلاً داروخانه هدف دیگری انتخاب کرده‌اید.');
+        if(pharmacyId == USER_ID) {{
+            if(selectedTargetPharmacy !== null && selectedTargetPharmacy != USER_ID) {{
+                showToast('❌ شما در حال انتخاب از داروهای خود هستید، اما قبلاً داروخانه هدف دیگری انتخاب کرده‌اید.', 'error');
                 return;
             }}
             selectedTargetPharmacy = null;
@@ -1847,11 +2021,11 @@ def exchange():
             
             var drug = myDrugs.find(d => d.id === drugId);
             if(drug) {{
-                toggleDrugSelection('my', drugId, drugName, drug.quantity, expiryDate, userId);
+                toggleDrugSelection('my', drugId, drugName, drug.quantity, expiryDate, USER_ID);
                 document.getElementById('exchangeDualView').style.display = 'block';
                 loadDrugsForExchange();
             }} else {{
-                alert('این دارو در لیست داروهای من موجود نیست');
+                showToast('این دارو در لیست داروهای من موجود نیست', 'error');
                 return;
             }}
         }} else {{
@@ -1859,7 +2033,7 @@ def exchange():
                 selectedTargetPharmacy = pharmacyId;
                 selectedTargetPharmacyName = pharmacyName;
             }} else if(selectedTargetPharmacy !== pharmacyId) {{
-                alert('❌ شما نمی‌توانید از دو داروخانه مختلف انتخاب کنید.');
+                showToast('❌ شما نمی‌توانید از دو داروخانه مختلف انتخاب کنید.', 'error');
                 return;
             }}
             
@@ -1880,9 +2054,10 @@ def exchange():
                             document.getElementById('exchangeDualView').style.display = 'block';
                             loadDrugsForExchange();
                         }} else {{
-                            alert('این دارو در داروخانه هدف موجود نیست');
+                            showToast('این دارو در داروخانه هدف موجود نیست', 'error');
                         }}
-                    }});
+                    }})
+                    .catch(()=> showToast('❌ خطا در دریافت اطلاعات', 'error'));
                 return;
             }}
         }}
@@ -1892,10 +2067,12 @@ def exchange():
     
     function loadDrugsForExchange() {{
         fetch('/api/get_my_drugs_for_exchange')
-            .then(r=>r.json()).then(data=>{{ myDrugs = sortByExpiryDate(data.drugs || []); renderMyDrugsList(); }});
+            .then(r=>r.json()).then(data=>{{ myDrugs = sortByExpiryDate(data.drugs || []); renderMyDrugsList(); }})
+            .catch(()=> showToast('❌ خطا در دریافت داروهای من', 'error'));
         if(selectedTargetPharmacy) {{
             fetch('/api/get_pharmacy_drugs_for_exchange?pharmacy_id=' + selectedTargetPharmacy)
-                .then(r=>r.json()).then(data=>{{ targetDrugs = sortByExpiryDate(data.drugs || []); renderTargetDrugsList(); }});
+                .then(r=>r.json()).then(data=>{{ targetDrugs = sortByExpiryDate(data.drugs || []); renderTargetDrugsList(); }})
+                .catch(()=> showToast('❌ خطا در دریافت داروهای هدف', 'error'));
         }} else {{ targetDrugs = []; renderTargetDrugsList(); }}
         document.getElementById('exchangeDualView').style.display = 'block';
         renderSummary();
@@ -1909,8 +2086,8 @@ def exchange():
             var isSelected = selectedItems.some(item => item.source === 'my' && item.id === drug.id);
             var status = getExpiryStatusText(drug.expiry_date);
             var safeName = drug.name.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
-            html += '<div class="exchange-drug-item ' + (isSelected ? 'selected' : '') + '" onclick="toggleDrugSelection(\\'my\\', ' + drug.id + ', \\'' + safeName + '\\', ' + drug.quantity + ', \\'' + (drug.expiry_date || '') + '\\', ' + sessionStorage.getItem('userId') + ')">';
-            html += '<input type="checkbox" class="exchange-drug-check" ' + (isSelected ? 'checked' : '') + ' onchange="event.stopPropagation(); toggleDrugSelection(\\'my\\', ' + drug.id + ', \\'' + safeName + '\\', ' + drug.quantity + ', \\'' + (drug.expiry_date || '') + '\\', ' + sessionStorage.getItem('userId') + ')">';
+            html += '<div class="exchange-drug-item ' + (isSelected ? 'selected' : '') + '" onclick="toggleDrugSelection(\\'my\\', ' + drug.id + ', \\'' + safeName + '\\', ' + drug.quantity + ', \\'' + (drug.expiry_date || '') + '\\', ' + USER_ID + ')">';
+            html += '<input type="checkbox" class="exchange-drug-check" ' + (isSelected ? 'checked' : '') + ' onchange="event.stopPropagation(); toggleDrugSelection(\\'my\\', ' + drug.id + ', \\'' + safeName + '\\', ' + drug.quantity + ', \\'' + (drug.expiry_date || '') + '\\', ' + USER_ID + ')">';
             html += '<div class="exchange-drug-info"><div class="exchange-drug-name">' + drug.name + '</div>';
             html += '<div class="exchange-drug-detail">📦 ' + drug.quantity + ' عدد | 📅 ' + (drug.expiry_date || 'نامشخص') + ' ' + status.text + '</div></div>';
             if(isSelected) {{
@@ -2001,8 +2178,8 @@ def exchange():
     function confirmExchangeFinal() {{
         var myItems = selectedItems.filter(item => item.source === 'my');
         var targetItems = selectedItems.filter(item => item.source === 'target');
-        if(myItems.length === 0 && targetItems.length === 0) {{ alert('هیچ دارویی برای تبادل انتخاب نشده است'); return; }}
-        if(!selectedTargetPharmacy) {{ alert('لطفا داروخانه هدف را انتخاب کنید'); return; }}
+        if(myItems.length === 0 && targetItems.length === 0) {{ showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }}
+        if(!selectedTargetPharmacy) {{ showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }}
         
         var summary = '';
         if(myItems.length > 0) {{ summary += '📦 داروهایی که می‌دهم:\\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\\n'); }}
@@ -2014,15 +2191,16 @@ def exchange():
         fetch('/api/register_exchange', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(data) }})
             .then(r=>r.json()).then(res => {{
                 if(res.success) {{ 
-                    alert('✅ درخواست تبادل با موفقیت ارسال شد'); 
+                    showToast('✅ درخواست تبادل با موفقیت ارسال شد', 'success'); 
                     resetExchangeSelection(); 
                     loadDrugsForExchange(); 
                     loadExchanges(); 
                     loadPendingExchanges(); 
                 }} else {{ 
-                    alert('❌ خطا: ' + res.error); 
+                    showToast('❌ خطا: ' + res.error, 'error'); 
                 }}
-            }});
+            }})
+            .catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function filterMyExchanges() {{
@@ -2054,7 +2232,7 @@ def exchange():
         fetch('/api/get_exchanges').then(r=>r.json()).then(d=>{{
             allMyExchanges = d.exchanges || [];
             renderMyExchangesList(allMyExchanges);
-        }});
+        }}).catch(()=> showToast('❌ خطا در دریافت تبادلات', 'error'));
     }}
     
     function loadPendingExchanges() {{
@@ -2089,20 +2267,20 @@ def exchange():
                 html += '</div></div>';
             }});
             document.getElementById('pendingExchangesList').innerHTML = html;
-        }});
+        }}).catch(()=> showToast('❌ خطا در دریافت تبادلات', 'error'));
     }}
     
     function confirmPendingExchange(exchangeId) {{
         if(confirm('آیا از تایید این تبادل اطمینان دارید؟')) {{
             fetch('/api/confirm_exchange/' + exchangeId, {{ method: 'POST' }}).then(r=>r.json()).then(data=>{{ 
                 if(data.success) {{ 
-                    alert('✅ تبادل با موفقیت تایید شد'); 
+                    showToast('✅ تبادل با موفقیت تایید شد', 'success'); 
                     loadPendingExchanges(); 
                     loadExchanges(); 
                 }} else {{ 
-                    alert('❌ خطا: ' + data.error); 
+                    showToast('❌ خطا: ' + data.error, 'error'); 
                 }} 
-            }});
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
@@ -2110,12 +2288,12 @@ def exchange():
         if(confirm('آیا از رد این تبادل اطمینان دارید؟')) {{
             fetch('/api/reject_exchange/' + exchangeId, {{ method: 'POST' }}).then(r=>r.json()).then(data=>{{ 
                 if(data.success) {{ 
-                    alert('✅ درخواست تبادل رد شد'); 
+                    showToast('✅ درخواست تبادل رد شد', 'success'); 
                     loadPendingExchanges(); 
                 }} else {{ 
-                    alert('❌ خطا: ' + data.error); 
+                    showToast('❌ خطا: ' + data.error, 'error'); 
                 }} 
-            }});
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
@@ -2136,11 +2314,6 @@ def exchange():
             loadPendingExchanges(); 
         }}
     }}
-    
-    // ذخیره userId در sessionStorage
-    fetch('/api/get_current_user').then(r=>r.json()).then(data=>{{
-        sessionStorage.setItem('userId', data.id);
-    }});
     
     loadUserCategories();
     loadExchanges();
@@ -2190,6 +2363,16 @@ def deficit():
     <script>
     let allDrugs = [];
     
+    function showToast(message, type) {{
+        var toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast-message ' + (type || 'info');
+        toast.style.display = 'block';
+        setTimeout(function() {{
+            toast.style.display = 'none';
+        }}, 3000);
+    }}
+    
     function searchDrugs(query) {{
         let suggestions = document.getElementById('suggestions');
         if(query.length < 2) {{ suggestions.style.display = 'none'; return; }}
@@ -2209,7 +2392,8 @@ def deficit():
                 }} else {{
                     suggestions.style.display = 'none';
                 }}
-            }});
+            }})
+            .catch(() => {{ suggestions.style.display = 'none'; }});
     }}
     
     function selectDrug(name) {{
@@ -2227,19 +2411,20 @@ def deficit():
             .then(r => r.json())
             .then(data => {{
                 if(data.success) {{
-                    alert('✅ دارو به کسری اضافه شد');
+                    showToast('✅ دارو به کسری اضافه شد', 'success');
                     loadDrugs();
                 }} else {{
-                    alert('خطا: ' + data.error);
+                    showToast('خطا: ' + data.error, 'error');
                 }}
-            }});
+            }})
+            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function loadDrugs() {{
         fetch('/api/get_drugs').then(r=>r.json()).then(d=>{{
             allDrugs = d.drugs || [];
             renderDrugsList();
-        }});
+        }}).catch(() => showToast('❌ خطا در دریافت لیست', 'error'));
     }}
     
     function renderDrugsList() {{
@@ -2286,7 +2471,7 @@ def deficit():
     function deleteSelectedDrugs() {{
         let ids = getSelectedDrugIds();
         if(ids.length === 0) {{
-            alert('حداقل یک دارو را انتخاب کنید');
+            showToast('حداقل یک دارو را انتخاب کنید', 'error');
             return;
         }}
         if(confirm(ids.length + ' دارو حذف شود؟')) {{
@@ -2296,17 +2481,17 @@ def deficit():
                 body: JSON.stringify({{drug_ids: ids}})
             }}).then(r=>r.json()).then(data=>{{
                 if(data.success) {{
-                    alert('✅ داروها حذف شدند');
+                    showToast('✅ داروها حذف شدند', 'success');
                     loadDrugs();
                 }} else {{
-                    alert('خطا: ' + data.error);
+                    showToast('خطا: ' + data.error, 'error');
                 }}
-            }});
+            }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
     function del(id) {{
-        if(confirm('حذف شود؟')) fetch('/api/delete_drug/'+id, {{method:'POST'}}).then(()=>loadDrugs());
+        if(confirm('حذف شود؟')) fetch('/api/delete_drug/'+id, {{method:'POST'}}).then(()=>loadDrugs()).catch(()=>showToast('❌ خطا', 'error'));
     }}
     
     document.addEventListener('click', function(e) {{
@@ -2319,6 +2504,11 @@ def deficit():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='📋 دفتر کسری', session=session)
+
+# ===== ادامه در بخش بعدی =====
+EOF
+
+cat >> /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 
 # ===== پنل ادمین =====
 @app.route('/admin')
@@ -2360,6 +2550,8 @@ def admin_panel():
             
             if is_approved == 0:
                 status_badge = '<span class="badge badge-warning">⏳ در انتظار تأیید</span>'
+            elif is_approved == 2:
+                status_badge = '<span class="badge badge-danger">❌ رد شده</span>'
             elif u['is_full_user']:
                 status_badge = '<span class="badge badge-success">کاربر کامل</span>'
             else:
@@ -2506,62 +2698,72 @@ def admin_panel():
     </div>
     
     <script>
+    function showToast(message, type) {{
+        var toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast-message ' + (type || 'info');
+        toast.style.display = 'block';
+        setTimeout(function() {{
+            toast.style.display = 'none';
+        }}, 3000);
+    }}
+    
     function approveUser(id) {{
         if(confirm('آیا از تأیید این کاربر اطمینان دارید؟')) {{
             fetch('/admin/approve_user/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{ alert('✅ کاربر تأیید شد'); location.reload(); }}
-                else {{ alert('❌ خطا: ' + data.error); }}
-            }});
+                if(data.success) {{ showToast('✅ کاربر تأیید شد', 'success'); location.reload(); }}
+                else {{ showToast('❌ خطا: ' + data.error, 'error'); }}
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
     function rejectUser(id) {{
         if(confirm('آیا از رد این کاربر اطمینان دارید؟')) {{
             fetch('/admin/reject_user/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{ alert('✅ کاربر رد شد'); location.reload(); }}
-                else {{ alert('❌ خطا: ' + data.error); }}
-            }});
+                if(data.success) {{ showToast('✅ کاربر رد شد', 'success'); location.reload(); }}
+                else {{ showToast('❌ خطا: ' + data.error, 'error'); }}
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
     function deleteUser(id) {{
         if(confirm('آیا از حذف این کاربر اطمینان دارید؟')) {{
             fetch('/admin/delete_user/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{ alert('✅ کاربر حذف شد'); location.reload(); }}
-                else {{ alert('❌ خطا: ' + data.error); }}
-            }});
+                if(data.success) {{ showToast('✅ کاربر حذف شد', 'success'); location.reload(); }}
+                else {{ showToast('❌ خطا: ' + data.error, 'error'); }}
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
     function toggleInterview(id) {{
         fetch('/admin/toggle_interview/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
             if(data.success) location.reload();
-            else alert('❌ خطا: ' + data.error);
-        }});
+            else showToast('❌ خطا: ' + data.error, 'error');
+        }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function deleteInterview(id) {{
         if(confirm('آیا از حذف این مصاحبه اطمینان دارید؟')) {{
             fetch('/admin/delete_interview/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{ alert('✅ مصاحبه حذف شد'); location.reload(); }}
-                else {{ alert('❌ خطا: ' + data.error); }}
-            }});
+                if(data.success) {{ showToast('✅ مصاحبه حذف شد', 'success'); location.reload(); }}
+                else {{ showToast('❌ خطا: ' + data.error, 'error'); }}
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     
     function toggleAnnouncement(id) {{
         fetch('/admin/toggle_announcement/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
             if(data.success) location.reload();
-            else alert('❌ خطا: ' + data.error);
-        }});
+            else showToast('❌ خطا: ' + data.error, 'error');
+        }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function deleteAnnouncement(id) {{
         if(confirm('آیا از حذف این اطلاعیه اطمینان دارید؟')) {{
             fetch('/admin/delete_announcement/'+id, {{method:'POST'}}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{ alert('✅ اطلاعیه حذف شد'); location.reload(); }}
-                else {{ alert('❌ خطا: ' + data.error); }}
-            }});
+                if(data.success) {{ showToast('✅ اطلاعیه حذف شد', 'success'); location.reload(); }}
+                else {{ showToast('❌ خطا: ' + data.error, 'error'); }}
+            }}).catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
         }}
     }}
     </script>
@@ -2685,6 +2887,11 @@ def delete_announcement(announcement_id):
     db.execute("DELETE FROM announcements WHERE id = ?", (announcement_id,))
     db.commit()
     return jsonify({'success': True})
+
+# ===== ادامه API =====
+EOF
+
+cat >> /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 
 # ===== API =====
 
@@ -3335,5 +3542,9 @@ if __name__ == '__main__':
     print("   A101 / drsaboori")
     print("   A102 / drjafari")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("⚠️ کاربران جدید پس از ثبت‌نام نیاز به تأیید ادمین دارند")
+    print("=" * 50)
+    app.run(host='0.0.0.0', port=5000, debug=False)
 EOF
+
+echo "فایل با موفقیت ایجاد شد."
