@@ -2525,7 +2525,7 @@ def admin_panel():
     cursor = db.execute("SELECT COUNT(*) as count FROM drugs")
     total_drugs = cursor.fetchone()['count']
     
-    cursor = db.execute("SELECT SUM(quantity) as total FROM inventory")
+    cursor = db.execute("SELECT COALESCE(SUM(quantity), 0) as total FROM inventory")
     total_inventory = cursor.fetchone()['total'] or 0
     
     cursor = db.execute("SELECT * FROM users ORDER BY created_at DESC")
