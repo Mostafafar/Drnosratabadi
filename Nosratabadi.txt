@@ -3088,7 +3088,7 @@ def place_order():
         drug = cursor.fetchone()
         if drug:
             qty = int(quantities.get(str(drug_id), drug['quantity']))
-            db.execute('INSERT INTO orders (user_id, company, drug_name, quantity, ordered_at) VALUES (?, ?, ?, ?, ?)',
+            db.execute("INSERT INTO orders (user_id, company, drug_name, quantity, ordered_at) VALUES (?, ?, ?, ?, ?)",
                       (user_id, company, drug['name'], qty, datetime.now().isoformat()))
             if drug['type'] != 'quota':
                 db.execute("UPDATE drugs SET ordered = 1 WHERE id = ?", (drug_id,))
