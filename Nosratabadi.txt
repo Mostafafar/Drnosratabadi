@@ -1728,14 +1728,25 @@ def inventory():
         return year + '.' + month;
     }}
     
-    function addInventory() {{
+    function addInventory() {
+        console.log('🔄 addInventory called at', new Date().toISOString());
         var name = document.getElementById('invName').value;
         var qty = document.getElementById('invQty').value;
-        
+    
+        console.log('📦 Form values:', {name, qty});
+    
         var formRow = document.getElementById('invName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
-        
-        if(!name || !qty || !expiry) {{ showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error'); return; }}
+    
+        console.log('📅 Expiry date:', expiry);
+        console.log('📍 Location:', document.getElementById('location').value);
+    
+        if(!name || !qty || !expiry) {
+            console.warn('⚠️ Missing required fields');
+            showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error');
+            return;
+        }
+    
         var fd = new FormData();
         fd.append('name', name);
         fd.append('quantity', qty);
@@ -1743,18 +1754,43 @@ def inventory():
         fd.append('location', document.getElementById('location').value);
         fd.append('supplier', document.getElementById('supplier').value);
         fd.append('purchase_price', document.getElementById('price').value);
-        fetch('/api/add_inventory', {{method:'POST', body:fd}})
-            .then(r=>r.json())
-            .then(data=>{{ 
-                if(data.success) {{ 
-                    showToast('✅ دارو ثبت شد', 'success'); 
-                    location.reload(); 
-                }} else {{ 
-                    showToast('خطا: ' + data.error, 'error'); 
-                }} 
-            }})
-            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
-    }}
+    
+        console.log('📤 Sending request to /api/add_inventory');
+        console.log('📤 FormData entries:');
+        for (var pair of fd.entries()) {
+            console.log('   ' + pair[0] + ': ' + pair[1]);
+        }
+    
+        fetch('/api/add_inventory', {
+            method: 'POST',
+            body: fd
+        })
+        .then(r => {
+            console.log('📡 Response status:', r.status);
+            return r.json();
+        })
+        .then(data => {
+            console.log('📦 API response:', data);
+            if(data.success) { 
+                showToast('✅ دارو ثبت شد', 'success');
+                console.log('✅ Drug added successfully, reloading inventory...');
+                // بارگذاری مجدد داده‌ها به جای رفرش صفحه
+                loadInventory();
+                // پاک کردن فرم
+                document.getElementById('invName').value = '';
+                document.getElementById('invQty').value = '1';
+                document.getElementById('supplier').value = '';
+                document.getElementById('price').value = '';
+            } else { 
+                console.error('❌ API error:', data.error);
+                showToast('خطا: ' + data.error, 'error'); 
+            } 
+        })
+        .catch(err => {
+            console.error('❌ Fetch error:', err);
+            showToast('❌ خطا در ارتباط با سرور', 'error');
+        });
+    }
     
     function registerSale() {{
         var name = document.getElementById('saleDrugName').value;
