@@ -1575,7 +1575,15 @@ def inventory():
     }}
     
     function renderInventory() {{
+        console.log('🔄 renderInventory called');
+        console.log('📊 inventoryData:', inventoryData);
+        
         var container = document.getElementById('inventoryContainer');
+        if (!container) {{
+            console.error('❌ inventoryContainer not found!');
+            return;
+        }}
+        
         var filtered = inventoryData.filter(tab => {{
             if(!currentFilter) return true;
             return tab.pharmacies.some(ph => 
@@ -1649,17 +1657,34 @@ def inventory():
     function togglePharmacyGroup(header) {{ var body = header.nextElementSibling; body.classList.toggle('show'); }}
     
     function loadInventory() {{
-        fetch('/api/get_inventory_grouped_by_expiry')
-            .then(r => r.json())
-            .then(data => {{
-                inventoryData = data.data || [];
-                loadHiddenItems();
-            }})
-            .catch(err => {{
-                console.error('Error:', err);
-                document.getElementById('inventoryContainer').innerHTML = '<p style="text-align:center;padding:40px;color:#dc3545">❌ خطا در بارگذاری</p>';
-                showToast('❌ خطا در بارگذاری انبار', 'error');
-            }});
+        console.log('🔄 loadInventory called at', new Date().toISOString());
+        console.log('🔄 Current inventoryData before load:', inventoryData);
+        
+        fetch('/api/get_inventory_grouped_by_expiry', {{
+            headers: {{
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }}
+        }})
+        .then(r => {{
+            console.log('📡 Response status:', r.status);
+            return r.json();
+        }})
+        .then(data => {{
+            console.log('📦 API response data:', data);
+            inventoryData = data.data || [];
+            console.log('📊 Number of expiry groups:', inventoryData.length);
+            if (inventoryData.length > 0) {{
+                console.log('📊 First group sample:', JSON.stringify(inventoryData[0], null, 2));
+            }}
+            loadHiddenItems();
+        }})
+        .catch(err => {{
+            console.error('❌ Error loading inventory:', err);
+            document.getElementById('inventoryContainer').innerHTML = '<p style="text-align:center;padding:40px;color:#dc3545">❌ خطا در بارگذاری</p>';
+            showToast('❌ خطا در بارگذاری انبار', 'error');
+        }});
     }}
     
     function searchDrugsInv(query) {{
@@ -1728,25 +1753,25 @@ def inventory():
         return year + '.' + month;
     }}
     
-    function addInventory() {
+    function addInventory() {{
         console.log('🔄 addInventory called at', new Date().toISOString());
         var name = document.getElementById('invName').value;
         var qty = document.getElementById('invQty').value;
-    
-        console.log('📦 Form values:', {name, qty});
-    
+        
+        console.log('📦 Form values:', {{name, qty}});
+        
         var formRow = document.getElementById('invName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
-    
+        
         console.log('📅 Expiry date:', expiry);
         console.log('📍 Location:', document.getElementById('location').value);
-    
-        if(!name || !qty || !expiry) {
+        
+        if(!name || !qty || !expiry) {{
             console.warn('⚠️ Missing required fields');
             showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error');
             return;
-        }
-    
+        }}
+        
         var fd = new FormData();
         fd.append('name', name);
         fd.append('quantity', qty);
@@ -1754,43 +1779,41 @@ def inventory():
         fd.append('location', document.getElementById('location').value);
         fd.append('supplier', document.getElementById('supplier').value);
         fd.append('purchase_price', document.getElementById('price').value);
-    
+        
         console.log('📤 Sending request to /api/add_inventory');
         console.log('📤 FormData entries:');
-        for (var pair of fd.entries()) {
+        for (var pair of fd.entries()) {{
             console.log('   ' + pair[0] + ': ' + pair[1]);
-        }
-    
-        fetch('/api/add_inventory', {
+        }}
+        
+        fetch('/api/add_inventory', {{
             method: 'POST',
             body: fd
-        })
-        .then(r => {
+        }})
+        .then(r => {{
             console.log('📡 Response status:', r.status);
             return r.json();
-        })
-        .then(data => {
+        }})
+        .then(data => {{
             console.log('📦 API response:', data);
-            if(data.success) { 
+            if(data.success) {{ 
                 showToast('✅ دارو ثبت شد', 'success');
                 console.log('✅ Drug added successfully, reloading inventory...');
-                // بارگذاری مجدد داده‌ها به جای رفرش صفحه
                 loadInventory();
-                // پاک کردن فرم
                 document.getElementById('invName').value = '';
                 document.getElementById('invQty').value = '1';
                 document.getElementById('supplier').value = '';
                 document.getElementById('price').value = '';
-            } else { 
+            }} else {{ 
                 console.error('❌ API error:', data.error);
                 showToast('خطا: ' + data.error, 'error'); 
-            } 
-        })
-        .catch(err => {
+            }} 
+        }})
+        .catch(err => {{
             console.error('❌ Fetch error:', err);
             showToast('❌ خطا در ارتباط با سرور', 'error');
-        });
-    }
+        }});
+    }}
     
     function registerSale() {{
         var name = document.getElementById('saleDrugName').value;
@@ -1841,7 +1864,6 @@ def inventory():
             .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
-    // آپدیت پیش‌نمایش تاریخ هنگام تغییر سال یا ماه
     document.addEventListener('change', function(e) {{
         if(e.target.classList.contains('expiry-year') || e.target.classList.contains('expiry-month')) {{
             var row = e.target.closest('.form-row');
@@ -1866,6 +1888,14 @@ def inventory():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='📦 انبارداری', session=session)
+
+    
+                
+            
+            
+            
+            
+
 
 # ===== ادامه در بخش بعدی =====
 
