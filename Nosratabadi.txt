@@ -3522,6 +3522,63 @@ def register_exchange():
     db.commit()
     return jsonify({'success': True})
 
+@app.route('/api/register_exchange', methods=['POST'])
+@login_required
+def register_exchange():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    
+    target_pharmacy_id = data.get('target_pharmacy_id')
+    my_items = data.get('my_items', [])
+    target_items = data.get('target_items', [])
+    
+    if not target_pharmacy_id:
+        return jsonify({'success': False, 'error': 'Target pharmacy not selected'})
+    
+    cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    sender_categories = row['categories'] if row else ''
+    
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
+    sender = cursor.fetchone()
+    sender_name = sender['pharmacy_display_name'] if sender else 'My Pharmacy'
+    
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (target_pharmacy_id,))
+    target = cursor.fetchone()
+    target_name = target['pharmacy_display_name'] if target else 'Target Pharmacy'
+    
+    now_iran = get_iran_time_iso()
+    
+    # ثبت برای داروخانه هدف (درخواست دریافت)
+    if target_items:
+        for item in target_items:
+            db.execute('''INSERT INTO exchanges (
+                user_id, buyer_name, drug_name, quantity, expiry_date, location, 
+                exchange_date, status, target_pharmacy_id, sender_categories, 
+                my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                (target_pharmacy_id, sender_name, item['name'], item['quantity'], 
+                 item.get('expiry_date', ''), 'pharmacy', now_iran, user_id, 
+                 sender_categories, json.dumps(my_items), json.dumps(target_items), 
+                 user_id, sender_name))
+    
+    # ثبت برای کاربر فعلی (درخواست ارسال)
+    if my_items:
+        for item in my_items:
+            db.execute('''INSERT INTO exchanges (
+                user_id, buyer_name, drug_name, quantity, expiry_date, location, 
+                exchange_date, status, target_pharmacy_id, sender_categories, 
+                my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                (user_id, target_name, item['name'], item['quantity'], 
+                 item.get('expiry_date', ''), 'pharmacy', now_iran, target_pharmacy_id, 
+                 sender_categories, json.dumps(my_items), json.dumps(target_items), 
+                 user_id, sender_name))
+    
+    db.commit()
+    return jsonify({'success': True})
+
 @app.route('/api/get_exchanges')
 @login_required
 def get_exchanges():
