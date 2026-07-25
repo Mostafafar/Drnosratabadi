@@ -17,6 +17,13 @@ import base64
 import re
 import uuid
 import sys
+from datetime import datetime, timedelta
+
+def get_iran_time_iso():
+    """دریافت زمان فعلی به وقت ایران (UTC+3:30) بدون نیاز به pytz"""
+    # ایران UTC+3:30 است
+    iran_time = datetime.utcnow() + timedelta(hours=3, minutes=30)
+    return iran_time.isoformat()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-secret-key-2024')
@@ -3484,13 +3491,15 @@ def register_exchange():
     target = cursor.fetchone()
     target_name = target['pharmacy_display_name'] if target else 'Target Pharmacy'
     
+    now_iran = get_iran_time_iso()
+    
     # ثبت برای داروخانه هدف (درخواست دریافت)
     if target_items:
         for item in target_items:
             db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
                           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
                        (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                        datetime.now().isoformat(), user_id, sender_categories,
+                        now_iran, user_id, sender_categories,
                         json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
     # ثبت برای کاربر فعلی (درخواست ارسال)
@@ -3499,7 +3508,7 @@ def register_exchange():
             db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
                           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
                        (user_id, target_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                        datetime.now().isoformat(), target_pharmacy_id, sender_categories,
+                        now_iran, target_pharmacy_id, sender_categories,
                         json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
     db.commit()
@@ -3518,11 +3527,16 @@ def get_exchanges():
 def get_pending_exchanges():
     db = get_db()
     user_id = session['user_id']
-    cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? AND status = 'pending' ORDER BY exchange_date DESC", (user_id,))
+    cursor = db.execute("""
+        SELECT * FROM exchanges 
+        WHERE user_id = ? 
+        AND status = 'pending' 
+        AND source_pharmacy_id IS NOT NULL
+        AND source_pharmacy_id != ?
+        ORDER BY exchange_date DESC
+    """, (user_id, user_id))
     exchanges = [dict(row) for row in cursor.fetchall()]
-    # فقط تبادلاتی که از داروخانه دیگری آمده و هنوز تایید نشده
-    filtered = [e for e in exchanges if e.get('source_pharmacy_id') and e['source_pharmacy_id'] != user_id]
-    return jsonify({'exchanges': filtered})
+    return jsonify({'exchanges': exchanges})
 
 @app.route('/api/confirm_exchange/<int:exchange_id>', methods=['POST'])
 @login_required
@@ -3578,7 +3592,7 @@ def confirm_exchange(exchange_id):
         else:
             db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
                           VALUES (?, ?, ?, ?, ?, ?)''',
-                       (user_id, drug_name, quantity, expiry_date, 'pharmacy', datetime.now().isoformat()))
+                       (user_id, drug_name, quantity, expiry_date, 'pharmacy', get_iran_time_iso()))
     
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
     if exchange_dict.get('source_pharmacy_id'):
@@ -3597,7 +3611,7 @@ def reject_exchange(exchange_id):
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
-        return jsonify({'success': False, 'error': 'تبادل یافت نشد'})
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا پردازش شده است'})
     
     exchange_dict = dict(exchange)
     
@@ -3724,11 +3738,9 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
     db = get_db()
     result = []
     
-    # دریافت آیتم‌های هاید شده کاربر فعلی
     cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
     hidden_ids = [row['item_id'] for row in cursor.fetchall()]
     
-    # دریافت داروخانه‌های دیگر (فقط کاربران تایید شده)
     cursor = db.execute("""
         SELECT id, pharmacy_display_name 
         FROM users 
@@ -3736,12 +3748,10 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
     """, (user_id,))
     other_pharmacies = [dict(row) for row in cursor.fetchall()]
     
-    # دریافت اطلاعات داروخانه خود
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
     my_user = cursor.fetchone()
     my_pharmacy_name = my_user['pharmacy_display_name'] if my_user else 'داروخانه من'
     
-    # ترکیب همه داروخانه‌ها (خود + دیگران)
     all_pharmacies = [{'id': user_id, 'pharmacy_display_name': my_pharmacy_name}] + other_pharmacies
     
     expiry_groups = {}
@@ -3755,7 +3765,6 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
         if not drugs:
             continue
         for drug in drugs:
-            # اگر دارو هاید شده باشد و متعلق به کاربر فعلی باشد، نمایش ندهد
             if ph['id'] == user_id and drug['id'] in hidden_ids:
                 continue
             expiry = drug['expiry_date'] or 'نامشخص'
