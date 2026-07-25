@@ -3458,7 +3458,6 @@ def move_inventory():
     
     db.commit()
     return jsonify({'success': True})
-
 @app.route('/api/register_exchange', methods=['POST'])
 @login_required
 def register_exchange():
@@ -3471,7 +3470,7 @@ def register_exchange():
     target_items = data.get('target_items', [])
     
     if not target_pharmacy_id:
-        return jsonify({'success': False, 'error': 'داروخانه هدف انتخاب نشده است'})
+        return jsonify({'success': False, 'error': 'Target pharmacy not selected'})
     
     cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -3479,11 +3478,11 @@ def register_exchange():
     
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
     sender = cursor.fetchone()
-    sender_name = sender['pharmacy_display_name'] if sender else 'داروخانه من'
+    sender_name = sender['pharmacy_display_name'] if sender else 'My Pharmacy'
     
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (target_pharmacy_id,))
     target = cursor.fetchone()
-    target_name = target['pharmacy_display_name'] if target else 'داروخانه هدف'
+    target_name = target['pharmacy_display_name'] if target else 'Target Pharmacy'
     
     # ثبت برای داروخانه هدف (درخواست دریافت)
     if target_items:
