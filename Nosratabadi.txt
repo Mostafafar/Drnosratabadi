@@ -3493,23 +3493,31 @@ def register_exchange():
     
     now_iran = get_iran_time_iso()
     
-    # ثبت برای داروخانه هدف (درخواست دریافت)
+    # ثبت برای داروخانه هدف (درخواست دریافت) - این تبادل در لیست داروخانه هدف نمایش داده می‌شود
     if target_items:
         for item in target_items:
-            db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
-                       (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                        now_iran, user_id, sender_categories,
-                        json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+            db.execute('''INSERT INTO exchanges (
+                user_id, buyer_name, drug_name, quantity, expiry_date, location, 
+                exchange_date, status, target_pharmacy_id, sender_categories, 
+                my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                (target_pharmacy_id, sender_name, item['name'], item['quantity'], 
+                 item.get('expiry_date', ''), 'pharmacy', now_iran, user_id, 
+                 sender_categories, json.dumps(my_items), json.dumps(target_items), 
+                 user_id, sender_name))
     
-    # ثبت برای کاربر فعلی (درخواست ارسال)
+    # ثبت برای کاربر فعلی (درخواست ارسال) - این تبادل در لیست کاربر فعلی نمایش داده می‌شود
     if my_items:
         for item in my_items:
-            db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
-                       (user_id, target_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                        now_iran, target_pharmacy_id, sender_categories,
-                        json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+            db.execute('''INSERT INTO exchanges (
+                user_id, buyer_name, drug_name, quantity, expiry_date, location, 
+                exchange_date, status, target_pharmacy_id, sender_categories, 
+                my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                (user_id, target_name, item['name'], item['quantity'], 
+                 item.get('expiry_date', ''), 'pharmacy', now_iran, target_pharmacy_id, 
+                 sender_categories, json.dumps(my_items), json.dumps(target_items), 
+                 user_id, sender_name))
     
     db.commit()
     return jsonify({'success': True})
@@ -3519,22 +3527,33 @@ def register_exchange():
 def get_exchanges():
     db = get_db()
     user_id = session['user_id']
-    cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? ORDER BY exchange_date DESC", (user_id,))
-    return jsonify({'exchanges': [dict(row) for row in cursor.fetchall()]})
+    
+    # دریافت تمام تبادلاتی که کاربر در آنها نقش دارد (هم به عنوان فرستنده و هم گیرنده)
+    cursor = db.execute("""
+        SELECT * FROM exchanges 
+        WHERE user_id = ? OR target_pharmacy_id = ?
+        ORDER BY exchange_date DESC
+    """, (user_id, user_id))
+    
+    exchanges = [dict(row) for row in cursor.fetchall()]
+    return jsonify({'exchanges': exchanges})
 
 @app.route('/api/get_pending_exchanges')
 @login_required
 def get_pending_exchanges():
     db = get_db()
     user_id = session['user_id']
+    
+    # دریافت تبادلات pending که کاربر در آنها نقش دارد و از داروخانه دیگری آمده
     cursor = db.execute("""
         SELECT * FROM exchanges 
-        WHERE user_id = ? 
-        AND status = 'pending' 
+        WHERE (user_id = ? OR target_pharmacy_id = ?)
+        AND status = 'pending'
         AND source_pharmacy_id IS NOT NULL
         AND source_pharmacy_id != ?
         ORDER BY exchange_date DESC
-    """, (user_id, user_id))
+    """, (user_id, user_id, user_id))
+    
     exchanges = [dict(row) for row in cursor.fetchall()]
     return jsonify({'exchanges': exchanges})
 
@@ -3544,57 +3563,63 @@ def confirm_exchange(exchange_id):
     db = get_db()
     user_id = session['user_id']
     
+    # بررسی وجود تبادل با وضعیت pending
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
-        return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا تایید شده است'})
+        return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا پردازش شده است'})
     
     exchange_dict = dict(exchange)
     
-    target_items = json.loads(exchange_dict['target_items_json']) if exchange_dict['target_items_json'] else []
-    my_items = json.loads(exchange_dict['my_items_json']) if exchange_dict['my_items_json'] else []
-    
-    # کاهش موجودی برای داروهایی که از کاربر گرفته می‌شود
-    for item in target_items:
-        drug_name = item.get('name')
-        expiry_date = item.get('expiry_date', '')
-        quantity = item.get('quantity')
+    # فقط اگر تبادل از داروخانه دیگری آمده باشد پردازش شود
+    if exchange_dict.get('source_pharmacy_id') and exchange_dict['source_pharmacy_id'] != user_id:
+        target_items = json.loads(exchange_dict['target_items_json']) if exchange_dict['target_items_json'] else []
+        my_items = json.loads(exchange_dict['my_items_json']) if exchange_dict['my_items_json'] else []
         
-        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0", (user_id, drug_name, expiry_date))
-        inv_items = cursor.fetchall()
+        # کاهش موجودی برای داروهایی که از کاربر گرفته می‌شود
+        for item in target_items:
+            drug_name = item.get('name')
+            expiry_date = item.get('expiry_date', '')
+            quantity = item.get('quantity')
+            
+            cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0", (user_id, drug_name, expiry_date))
+            inv_items = cursor.fetchall()
+            
+            total_available = sum(i['quantity'] for i in inv_items)
+            if total_available < quantity:
+                return jsonify({'success': False, 'error': f'موجودی {drug_name} با تاریخ {expiry_date} کافی نیست'})
+            
+            remaining = quantity
+            for inv_item in inv_items:
+                if remaining <= 0:
+                    break
+                take = min(inv_item['quantity'], remaining)
+                new_qty = inv_item['quantity'] - take
+                if new_qty == 0:
+                    db.execute("DELETE FROM inventory WHERE id = ?", (inv_item['id'],))
+                else:
+                    db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
+                remaining -= take
         
-        total_available = sum(i['quantity'] for i in inv_items)
-        if total_available < quantity:
-            return jsonify({'success': False, 'error': f'موجودی {drug_name} با تاریخ {expiry_date} کافی نیست'})
-        
-        remaining = quantity
-        for inv_item in inv_items:
-            if remaining <= 0:
-                break
-            take = min(inv_item['quantity'], remaining)
-            new_qty = inv_item['quantity'] - take
-            if new_qty == 0:
-                db.execute("DELETE FROM inventory WHERE id = ?", (inv_item['id'],))
+        # افزایش موجودی برای داروهایی که به کاربر داده می‌شود
+        for item in my_items:
+            drug_name = item.get('name')
+            expiry_date = item.get('expiry_date', '')
+            quantity = item.get('quantity')
+            
+            cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = 'pharmacy'", (user_id, drug_name, expiry_date))
+            inv_item = cursor.fetchone()
+            if inv_item:
+                db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, inv_item['id']))
             else:
-                db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
-            remaining -= take
+                db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
+                              VALUES (?, ?, ?, ?, ?, ?)''',
+                           (user_id, drug_name, quantity, expiry_date, 'pharmacy', get_iran_time_iso()))
     
-    # افزایش موجودی برای داروهایی که به کاربر داده می‌شود
-    for item in my_items:
-        drug_name = item.get('name')
-        expiry_date = item.get('expiry_date', '')
-        quantity = item.get('quantity')
-        
-        cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = 'pharmacy'", (user_id, drug_name, expiry_date))
-        inv_item = cursor.fetchone()
-        if inv_item:
-            db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, inv_item['id']))
-        else:
-            db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
-                          VALUES (?, ?, ?, ?, ?, ?)''',
-                       (user_id, drug_name, quantity, expiry_date, 'pharmacy', get_iran_time_iso()))
-    
+    # به‌روزرسانی وضعیت تبادل به confirmed
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
+    
+    # به‌روزرسانی تبادلات مرتبط
     if exchange_dict.get('source_pharmacy_id'):
         db.execute("UPDATE exchanges SET status = 'confirmed' WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                    (exchange_dict['source_pharmacy_id'], user_id))
@@ -3608,6 +3633,7 @@ def reject_exchange(exchange_id):
     db = get_db()
     user_id = session['user_id']
     
+    # بررسی وجود تبادل با وضعیت pending
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
@@ -3615,7 +3641,10 @@ def reject_exchange(exchange_id):
     
     exchange_dict = dict(exchange)
     
+    # حذف تبادل
     db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
+    
+    # حذف تبادلات مرتبط
     if exchange_dict.get('source_pharmacy_id'):
         db.execute("DELETE FROM exchanges WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                    (exchange_dict['source_pharmacy_id'], user_id))
