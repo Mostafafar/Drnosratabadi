@@ -763,6 +763,17 @@ HTML = '''<!DOCTYPE html>
         .toast-message.error { background: #dc3545; }
         .toast-message.info { background: #17a2b8; }
         
+        .drug-item .drug-actions {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        .drug-item .drug-actions button {
+            padding: 2px 6px;
+            font-size: 10px;
+            border-radius: 4px;
+        }
+        
         @media (max-width: 768px) {
             .sidebar { width: 55px; }
             .sidebar .menu-text { display: none; }
@@ -833,6 +844,12 @@ HTML = '''<!DOCTYPE html>
             setTimeout(function() {
                 toast.style.display = 'none';
             }, 3000);
+        }
+        
+        function confirmAction(message, callback) {
+            if (confirm(message)) {
+                callback();
+            }
         }
     </script>
 </body>
@@ -1135,7 +1152,6 @@ def logout():
     return redirect(url_for('index'))
 
 # ===== ادامه در بخش بعدی =====
-
 # ===== داشبورد =====
 @app.route('/dashboard')
 @login_required
@@ -1407,12 +1423,13 @@ def inventory():
         <div class="card-title">📊 لیست انبار</div>
         <div class="toolbar">
             <input type="text" id="liveSearch" placeholder="🔍 جستجوی زنده..." onkeyup="filterInventory()" style="flex:2;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
-            <button onclick="exportToTelegram()" class="export-btn">📱 کپی متن</button>
-            <button onclick="toggleHiddenItems()" class="btn-warning">👁️ هاید</button>
+            <button onclick="copySelectedItems()" class="export-btn">📋 کپی انتخاب‌ها</button>
+            <button onclick="hideSelectedItems()" class="btn-warning">🙈 هاید انتخاب‌ها</button>
+            <button onclick="unhideSelectedItems()" class="btn-success">🔓 آن هاید</button>
+            <button onclick="deleteSelectedItems()" class="btn-danger">🗑️ حذف انتخاب‌ها</button>
             <button onclick="selectAllItems()" class="btn-sm">✅ انتخاب همه</button>
             <button onclick="deselectAllItems()" class="btn-sm">❌ لغو</button>
-            <button onclick="hideSelectedItems()" class="btn-danger">🙈 هاید انتخاب‌ها</button>
-            <button onclick="unhideSelectedItems()" class="btn-success">🔓 unhide</button>
+            <button onclick="toggleHiddenItems()" class="btn-sm">👁️ نمایش هاید</button>
         </div>
         <div id="stats" class="stats-grid"></div>
         <div id="inventoryContainer"></div>
@@ -1425,7 +1442,6 @@ def inventory():
     let showHidden = false;
     let hiddenIds = new Set();
     
-    // بازیابی hiddenIds از localStorage
     try {{
         var saved = localStorage.getItem('hiddenIds_' + USER_ID);
         if(saved) {{
@@ -1461,7 +1477,7 @@ def inventory():
     }}
     
     function validateExpiryFormat(expiry) {{
-        return /^\\d{4}\\.(0[1-9]|1[0-2])$/.test(expiry);
+        return /^\\d{{4}}\\.(0[1-9]|1[0-2])$/.test(expiry);
     }}
     
     function getExpiryStatusText(expiryDate) {{
@@ -1497,11 +1513,49 @@ def inventory():
         document.querySelectorAll('.drug-item .item-checkbox').forEach(cb => cb.checked = false);
     }}
     
-    function hideSelectedItems() {{
+    function getSelectedItemIds() {{
         var ids = [];
         document.querySelectorAll('.drug-item .item-checkbox:checked').forEach(cb => {{
             ids.push(parseInt(cb.dataset.id));
         }});
+        return ids;
+    }}
+    
+    function copySelectedItems() {{
+        var ids = getSelectedItemIds();
+        if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
+        
+        var text = "📋 لیست داروهای انتخاب شده\\n";
+        text += "📅 " + new Date().toLocaleDateString('fa-IR') + "\\n─────────────────────\\n";
+        
+        inventoryData.forEach(tab => {{
+            if(!tab || !tab.pharmacies) return;
+            tab.pharmacies.forEach(ph => {{
+                if(!ph || !ph.drugs) return;
+                ph.drugs.forEach(d => {{
+                    if(ids.includes(d.id) && (!d.hidden || showHidden)) {{
+                        text += "• " + d.name + ": " + d.quantity + " عدد (" + (d.location === 'warehouse' ? 'انبار' : 'داروخانه') + ") - انقضا: " + (d.expiry_date || 'نامشخص') + "\\n";
+                    }}
+                }});
+            }});
+        }});
+        
+        if(text.length > 5000) {{
+            showToast('گزارش بیش از حد بزرگ است', 'error');
+            return;
+        }}
+        
+        var textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('✅ متن در کلیپبورد کپی شد', 'success');
+    }}
+    
+    function hideSelectedItems() {{
+        var ids = getSelectedItemIds();
         if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
         if(!confirm(ids.length + ' آیتم هاید شود؟')) return;
         fetch('/api/toggle_hidden_items', {{
@@ -1521,10 +1575,7 @@ def inventory():
     }}
     
     function unhideSelectedItems() {{
-        var ids = [];
-        document.querySelectorAll('.drug-item .item-checkbox:checked').forEach(cb => {{
-            ids.push(parseInt(cb.dataset.id));
-        }});
+        var ids = getSelectedItemIds();
         if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
         if(!confirm(ids.length + ' آیتم unhide شود؟')) return;
         fetch('/api/toggle_hidden_items', {{
@@ -1543,47 +1594,42 @@ def inventory():
         }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
-    function exportToTelegram() {{
-        try {{
-            var text = "📦 گزارش انبار\\n📅 " + new Date().toLocaleDateString('fa-IR') + "\\n─────────────────────\\n";
-            inventoryData.forEach(tab => {{
-                if(!tab || !tab.pharmacies) return;
-                text += "\\n📅 " + tab.expiry_date + " " + (tab.status_text || '') + "\\n";
-                tab.pharmacies.forEach(ph => {{
-                    if(!ph || !ph.drugs) return;
-                    text += "  🏥 " + ph.pharmacy_name + "\\n";
-                    ph.drugs.forEach(d => {{
-                        if((!d.hidden || showHidden) && d.name) {{
-                            text += "    • " + d.name + ": " + d.quantity + " عدد (" + (d.location === 'warehouse' ? 'انبار' : 'داروخانه') + ")" + (d.hidden ? " [هاید]" : "") + "\\n";
-                        }}
-                    }});
-                }});
-            }});
-            if(text.length > 5000) {{
-                showToast('گزارش بیش از حد بزرگ است', 'error');
-                return;
+    function deleteSelectedItems() {{
+        var ids = getSelectedItemIds();
+        if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
+        if(!confirm('آیا از حذف ' + ids.length + ' آیتم انتخاب شده اطمینان دارید؟')) return;
+        fetch('/api/delete_inventory_items', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{item_ids: ids}})
+        }}).then(r=>r.json()).then(data=>{{
+            if(data.success) {{ 
+                showToast('✅ ' + ids.length + ' آیتم حذف شد', 'success');
+                loadInventory(); 
+            }} else {{ 
+                showToast('خطا: ' + data.error, 'error'); 
             }}
-            var textarea = document.createElement('textarea');
-            textarea.value = text;
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-            showToast('✅ متن در کلیپبورد کپی شد', 'success');
-        }} catch(e) {{
-            showToast('❌ خطا در تولید گزارش', 'error');
-        }}
+        }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
+    }}
+    
+    function deleteSingleItem(id) {{
+        if(!confirm('آیا از حذف این آیتم اطمینان دارید؟')) return;
+        fetch('/api/delete_inventory_item/' + id, {{ method: 'POST' }})
+            .then(r=>r.json())
+            .then(data=>{{
+                if(data.success) {{ 
+                    showToast('✅ آیتم حذف شد', 'success');
+                    loadInventory(); 
+                }} else {{ 
+                    showToast('خطا: ' + data.error, 'error'); 
+                }}
+            }})
+            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
     }}
     
     function renderInventory() {{
-        console.log('🔄 renderInventory called');
-        console.log('📊 inventoryData:', inventoryData);
-        
         var container = document.getElementById('inventoryContainer');
-        if (!container) {{
-            console.error('❌ inventoryContainer not found!');
-            return;
-        }}
+        if (!container) return;
         
         var filtered = inventoryData.filter(tab => {{
             if(!currentFilter) return true;
@@ -1637,13 +1683,15 @@ def inventory():
                     var locText = d.location === 'warehouse' ? 'انبار' : 'داروخانه';
                     var locClass = d.location === 'warehouse' ? 'location-warehouse' : 'location-pharmacy';
                     html += '<div class="drug-item">';
-                    if(!d.hidden || showHidden) {{
-                        html += '<input type="checkbox" class="item-checkbox" data-id="' + d.id + '">';
-                    }}
+                    html += '<input type="checkbox" class="item-checkbox" data-id="' + d.id + '">';
                     html += '<span class="drug-name">' + d.name + '</span>';
                     html += '<span class="drug-qty">' + d.quantity + ' عدد</span>';
                     html += '<span class="drug-location ' + locClass + '">' + locText + '</span>';
+                    html += '<span style="font-size:11px;color:#999;">انقضا: ' + (d.expiry_date || '-') + '</span>';
                     if(d.hidden) html += '<span style="font-size:11px;color:#dc3545;">🙈 هاید</span>';
+                    html += '<div class="drug-actions">';
+                    html += '<button onclick="deleteSingleItem(' + d.id + ')" class="btn-danger btn-sm">🗑️</button>';
+                    html += '</div>';
                     html += '</div>';
                 }});
                 html += '</div></div>';
@@ -1658,9 +1706,6 @@ def inventory():
     function togglePharmacyGroup(header) {{ var body = header.nextElementSibling; body.classList.toggle('show'); }}
     
     function loadInventory() {{
-        console.log('🔄 loadInventory called at', new Date().toISOString());
-        console.log('🔄 Current inventoryData before load:', inventoryData);
-        
         fetch('/api/get_inventory_grouped_by_expiry', {{
             headers: {{
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -1668,21 +1713,13 @@ def inventory():
                 'Expires': '0'
             }}
         }})
-        .then(r => {{
-            console.log('📡 Response status:', r.status);
-            return r.json();
-        }})
+        .then(r => r.json())
         .then(data => {{
-            console.log('📦 API response data:', data);
             inventoryData = data.data || [];
-            console.log('📊 Number of expiry groups:', inventoryData.length);
-            if (inventoryData.length > 0) {{
-                console.log('📊 First group sample:', JSON.stringify(inventoryData[0], null, 2));
-            }}
             loadHiddenItems();
         }})
         .catch(err => {{
-            console.error('❌ Error loading inventory:', err);
+            console.error('Error loading inventory:', err);
             document.getElementById('inventoryContainer').innerHTML = '<p style="text-align:center;padding:40px;color:#dc3545">❌ خطا در بارگذاری</p>';
             showToast('❌ خطا در بارگذاری انبار', 'error');
         }});
@@ -1755,20 +1792,12 @@ def inventory():
     }}
     
     function addInventory() {{
-        console.log('🔄 addInventory called at', new Date().toISOString());
         var name = document.getElementById('invName').value;
         var qty = document.getElementById('invQty').value;
-        
-        console.log('📦 Form values:', {{name, qty}});
-        
         var formRow = document.getElementById('invName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
         
-        console.log('📅 Expiry date:', expiry);
-        console.log('📍 Location:', document.getElementById('location').value);
-        
         if(!name || !qty || !expiry) {{
-            console.warn('⚠️ Missing required fields');
             showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error');
             return;
         }}
@@ -1781,37 +1810,24 @@ def inventory():
         fd.append('supplier', document.getElementById('supplier').value);
         fd.append('purchase_price', document.getElementById('price').value);
         
-        console.log('📤 Sending request to /api/add_inventory');
-        console.log('📤 FormData entries:');
-        for (var pair of fd.entries()) {{
-            console.log('   ' + pair[0] + ': ' + pair[1]);
-        }}
-        
         fetch('/api/add_inventory', {{
             method: 'POST',
             body: fd
         }})
-        .then(r => {{
-            console.log('📡 Response status:', r.status);
-            return r.json();
-        }})
+        .then(r => r.json())
         .then(data => {{
-            console.log('📦 API response:', data);
             if(data.success) {{ 
                 showToast('✅ دارو ثبت شد', 'success');
-                console.log('✅ Drug added successfully, reloading inventory...');
                 loadInventory();
                 document.getElementById('invName').value = '';
                 document.getElementById('invQty').value = '1';
                 document.getElementById('supplier').value = '';
                 document.getElementById('price').value = '';
             }} else {{ 
-                console.error('❌ API error:', data.error);
                 showToast('خطا: ' + data.error, 'error'); 
             }} 
         }})
         .catch(err => {{
-            console.error('❌ Fetch error:', err);
             showToast('❌ خطا در ارتباط با سرور', 'error');
         }});
     }}
@@ -1819,7 +1835,6 @@ def inventory():
     function registerSale() {{
         var name = document.getElementById('saleDrugName').value;
         var qty = document.getElementById('saleQty').value;
-        
         var formRow = document.getElementById('saleDrugName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
         
@@ -1834,7 +1849,7 @@ def inventory():
         .then(res => {{ 
             if(res.success) {{ 
                 showToast('✅ فروش ثبت شد', 'success'); 
-                location.reload(); 
+                loadInventory();
             }} else {{ 
                 showToast('خطا: ' + res.error, 'error'); 
             }} 
@@ -1847,7 +1862,6 @@ def inventory():
         var qty = document.getElementById('moveQty').value;
         var fromLoc = document.getElementById('moveFromLocation').value;
         var toLoc = document.getElementById('moveToLocation').value;
-        
         var formRow = document.getElementById('moveDrug').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
         
@@ -1857,7 +1871,7 @@ def inventory():
             .then(data=>{{ 
                 if(data.success) {{ 
                     showToast('✅ انتقال انجام شد', 'success'); 
-                    location.reload(); 
+                    loadInventory();
                 }} else {{ 
                     showToast('خطا: '+data.error, 'error'); 
                 }} 
@@ -1890,16 +1904,6 @@ def inventory():
     '''
     return render_template_string(HTML, content=content, page_title='📦 انبارداری', session=session)
 
-    
-                
-            
-            
-            
-            
-
-
-# ===== ادامه در بخش بعدی =====
-
 # ===== تبادل دارو =====
 @app.route('/exchange')
 @login_required
@@ -1907,7 +1911,7 @@ def exchange():
     db = get_db()
     user_id = session['user_id']
     
-    cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ?", (user_id,))
+    cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ? AND is_approved = 1", (user_id,))
     pharmacies = cursor.fetchall()
     
     pharmacy_options = ''
@@ -2365,7 +2369,6 @@ def exchange():
                     loadExchanges(); 
                     loadPendingExchanges();
                     loadExchangeAllDrugs();
-                    showToast('🔔 اعلان برای داروخانه ' + selectedTargetPharmacyName + ' ارسال شد', 'info');
                 }} else {{ 
                     showToast('❌ خطا: ' + res.error, 'error'); 
                 }}
@@ -2404,15 +2407,6 @@ def exchange():
             .then(d=>{{
                 allMyExchanges = d.exchanges || [];
                 renderMyExchangesList(allMyExchanges);
-                if(allMyExchanges.length > 0) {{
-                    var latest = allMyExchanges[0];
-                    var now = new Date();
-                    var created = new Date(latest.exchange_date);
-                    var diff = (now - created) / 1000;
-                    if(diff < 10) {{
-                        showToast('📬 تبادل جدید ثبت شد: ' + latest.buyer_name, 'success');
-                    }}
-                }}
             }})
             .catch(()=> showToast('❌ خطا در دریافت تبادلات', 'error'));
     }}
@@ -2508,6 +2502,7 @@ def exchange():
     '''
     return render_template_string(HTML, content=content, page_title='🔄 تبادل دارو', session=session)
 
+# ===== ادامه در بخش بعدی =====
 # ===== دفتر کسری =====
 @app.route('/deficit')
 @login_required
@@ -3179,7 +3174,7 @@ def api_get_pharmacy_drugs():
 @login_required
 def api_get_all_pharmacies():
     db = get_db()
-    cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ?", (session['user_id'],))
+    cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ? AND is_approved = 1", (session['user_id'],))
     pharmacies = cursor.fetchall()
     
     try:
@@ -3218,12 +3213,26 @@ def api_delete_drugs():
     db.commit()
     return jsonify({'success': True})
 
-@app.route('/api/delete_inventory/<int:item_id>', methods=['POST'])
+@app.route('/api/delete_inventory_item/<int:item_id>', methods=['POST'])
 @login_required
-def api_delete_inventory(item_id):
+def api_delete_inventory_item(item_id):
     db = get_db()
     user_id = session['user_id']
     db.execute("DELETE FROM inventory WHERE id = ? AND user_id = ?", (item_id, user_id))
+    db.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/delete_inventory_items', methods=['POST'])
+@login_required
+def api_delete_inventory_items():
+    db = get_db()
+    user_id = session['user_id']
+    data = request.get_json()
+    item_ids = data.get('item_ids', [])
+    if not item_ids:
+        return jsonify({'success': False, 'error': 'هیچ آیتمی انتخاب نشده است'})
+    placeholders = ','.join('?' for _ in item_ids)
+    db.execute(f"DELETE FROM inventory WHERE id IN ({placeholders}) AND user_id = ?", (*item_ids, user_id))
     db.commit()
     return jsonify({'success': True})
 
@@ -3344,7 +3353,6 @@ def search_with_stock():
         result.append({'name': name, 'warehouse_qty': warehouse_qty, 'pharmacy_qty': pharmacy_qty, 'nearest_expiry': nearest['expiry_date'] if nearest else '-'})
     return jsonify(result)
 
-
 # تنظیم لاگ
 LOG_FILE = '/var/www/poldaroo/pharmacy.log'
 logging.basicConfig(
@@ -3381,7 +3389,6 @@ def add_inventory():
             logging.error(f"❌ Invalid expiry date: {expiry_date}")
             return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
         
-        # بررسی موجودیت
         cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", 
                            (user_id, name, expiry_date, location))
         existing = cursor.fetchone()
@@ -3404,17 +3411,6 @@ def add_inventory():
         import traceback
         logging.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)})
-    
-    cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", (user_id, name, expiry_date, location))
-    existing = cursor.fetchone()
-    if existing:
-        db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, existing['id']))
-    else:
-        db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at, supplier, purchase_price)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                   (user_id, name, quantity, expiry_date, location, datetime.now().isoformat(), supplier, float(price_str) if price_str else 0))
-    db.commit()
-    return jsonify({'success': True})
 
 @app.route('/api/move_inventory', methods=['POST'])
 @login_required
@@ -3489,19 +3485,23 @@ def register_exchange():
     target = cursor.fetchone()
     target_name = target['pharmacy_display_name'] if target else 'داروخانه هدف'
     
-    for item in target_items:
-        db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
-                   (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                    datetime.now().isoformat(), user_id, sender_categories,
-                    json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+    # ثبت برای داروخانه هدف (درخواست دریافت)
+    if target_items:
+        for item in target_items:
+            db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                       (target_pharmacy_id, sender_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
+                        datetime.now().isoformat(), user_id, sender_categories,
+                        json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
-    for item in my_items:
-        db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
-                   (user_id, target_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
-                    datetime.now().isoformat(), target_pharmacy_id, sender_categories,
-                    json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
+    # ثبت برای کاربر فعلی (درخواست ارسال)
+    if my_items:
+        for item in my_items:
+            db.execute('''INSERT INTO exchanges (user_id, buyer_name, drug_name, quantity, expiry_date, location, exchange_date, status, target_pharmacy_id, sender_categories, my_items_json, target_items_json, source_pharmacy_id, source_pharmacy_name)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)''',
+                       (user_id, target_name, item['name'], item['quantity'], item.get('expiry_date', ''), 'pharmacy',
+                        datetime.now().isoformat(), target_pharmacy_id, sender_categories,
+                        json.dumps(my_items), json.dumps(target_items), user_id, sender_name))
     
     db.commit()
     return jsonify({'success': True})
@@ -3521,6 +3521,7 @@ def get_pending_exchanges():
     user_id = session['user_id']
     cursor = db.execute("SELECT * FROM exchanges WHERE user_id = ? AND status = 'pending' ORDER BY exchange_date DESC", (user_id,))
     exchanges = [dict(row) for row in cursor.fetchall()]
+    # فقط تبادلاتی که از داروخانه دیگری آمده و هنوز تایید نشده
     filtered = [e for e in exchanges if e.get('source_pharmacy_id') and e['source_pharmacy_id'] != user_id]
     return jsonify({'exchanges': filtered})
 
@@ -3540,6 +3541,7 @@ def confirm_exchange(exchange_id):
     target_items = json.loads(exchange_dict['target_items_json']) if exchange_dict['target_items_json'] else []
     my_items = json.loads(exchange_dict['my_items_json']) if exchange_dict['my_items_json'] else []
     
+    # کاهش موجودی برای داروهایی که از کاربر گرفته می‌شود
     for item in target_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
@@ -3564,6 +3566,7 @@ def confirm_exchange(exchange_id):
                 db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
             remaining -= take
     
+    # افزایش موجودی برای داروهایی که به کاربر داده می‌شود
     for item in my_items:
         drug_name = item.get('name')
         expiry_date = item.get('expiry_date', '')
@@ -3722,20 +3725,24 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
     db = get_db()
     result = []
     
+    # دریافت آیتم‌های هاید شده کاربر فعلی
     cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
     hidden_ids = [row['item_id'] for row in cursor.fetchall()]
     
+    # دریافت داروخانه‌های دیگر (فقط کاربران تایید شده)
     cursor = db.execute("""
         SELECT id, pharmacy_display_name 
         FROM users 
-        WHERE id != ?
+        WHERE id != ? AND is_approved = 1
     """, (user_id,))
     other_pharmacies = [dict(row) for row in cursor.fetchall()]
     
+    # دریافت اطلاعات داروخانه خود
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
     my_user = cursor.fetchone()
     my_pharmacy_name = my_user['pharmacy_display_name'] if my_user else 'داروخانه من'
     
+    # ترکیب همه داروخانه‌ها (خود + دیگران)
     all_pharmacies = [{'id': user_id, 'pharmacy_display_name': my_pharmacy_name}] + other_pharmacies
     
     expiry_groups = {}
@@ -3749,6 +3756,9 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
         if not drugs:
             continue
         for drug in drugs:
+            # اگر دارو هاید شده باشد و متعلق به کاربر فعلی باشد، نمایش ندهد
+            if ph['id'] == user_id and drug['id'] in hidden_ids:
+                continue
             expiry = drug['expiry_date'] or 'نامشخص'
             if expiry not in expiry_groups:
                 expiry_groups[expiry] = {}
