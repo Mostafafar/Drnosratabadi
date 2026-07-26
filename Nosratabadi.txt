@@ -2409,7 +2409,8 @@ class="exchange-drug-list">';
         document.getElementById('myExchangesList').innerHTML = html;
     }}
     
-    function loadExchanges() {
+    function loadExchanges()
+    {
         console.log('🔄 بارگذاری تبادلات...');
         fetch('/api/get_exchanges')
             .then(r => r.json())
