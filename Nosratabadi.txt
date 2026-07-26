@@ -3547,11 +3547,8 @@ def get_exchanges():
     for ex in exchanges:
         logging.info(f"   Exchange {ex['id']}: user_id={ex['user_id']}, target={ex.get('target_pharmacy_id')}, source={ex.get('source_pharmacy_id')}, status={ex['status']}, drug={ex['drug_name']}")
     
-    # اضافه کردن لاگ برای پاسخ
-    response_data = {'exchanges': exchanges}
-    logging.info(f"📤 Sending response with {len(exchanges)} exchanges")
-    
-    return jsonify(response_data)
+    return jsonify({'exchanges': exchanges})
+
 @app.route('/api/get_pending_exchanges')
 @login_required
 def get_pending_exchanges():
