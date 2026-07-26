@@ -3530,16 +3530,25 @@ def get_exchanges():
     db = get_db()
     user_id = session['user_id']
     
-    # دریافت تمام تبادلاتی که کاربر در آنها نقش دارد (هم به عنوان فرستنده و هم گیرنده)
+    logging.info(f"🔍 Getting exchanges for user_id: {user_id}")
+    
+    # دریافت تمام تبادلاتی که کاربر در آنها نقش دارد
+    # کاربر می‌تواند به عنوان user_id، target_pharmacy_id یا source_pharmacy_id باشد
     cursor = db.execute("""
         SELECT * FROM exchanges 
-        WHERE user_id = ? OR target_pharmacy_id = ?
+        WHERE user_id = ? 
+        OR target_pharmacy_id = ?
+        OR source_pharmacy_id = ?
         ORDER BY exchange_date DESC
-    """, (user_id, user_id))
+    """, (user_id, user_id, user_id))
     
     exchanges = [dict(row) for row in cursor.fetchall()]
+    
+    logging.info(f"✅ Found {len(exchanges)} exchanges for user {user_id}")
+    for ex in exchanges:
+        logging.info(f"   Exchange {ex['id']}: user_id={ex['user_id']}, target={ex.get('target_pharmacy_id')}, source={ex.get('source_pharmacy_id')}, status={ex['status']}, drug={ex['drug_name']}")
+    
     return jsonify({'exchanges': exchanges})
-
 @app.route('/api/get_pending_exchanges')
 @login_required
 def get_pending_exchanges():
