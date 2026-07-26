@@ -3533,7 +3533,6 @@ def get_exchanges():
     logging.info(f"🔍 Getting exchanges for user_id: {user_id}")
     
     # دریافت تمام تبادلاتی که کاربر در آنها نقش دارد
-    # کاربر می‌تواند به عنوان user_id، target_pharmacy_id یا source_pharmacy_id باشد
     cursor = db.execute("""
         SELECT * FROM exchanges 
         WHERE user_id = ? 
@@ -3548,7 +3547,11 @@ def get_exchanges():
     for ex in exchanges:
         logging.info(f"   Exchange {ex['id']}: user_id={ex['user_id']}, target={ex.get('target_pharmacy_id')}, source={ex.get('source_pharmacy_id')}, status={ex['status']}, drug={ex['drug_name']}")
     
-    return jsonify({'exchanges': exchanges})
+    # اضافه کردن لاگ برای پاسخ
+    response_data = {'exchanges': exchanges}
+    logging.info(f"📤 Sending response with {len(exchanges)} exchanges")
+    
+    return jsonify(response_data)
 @app.route('/api/get_pending_exchanges')
 @login_required
 def get_pending_exchanges():
