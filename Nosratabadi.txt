@@ -2484,22 +2484,22 @@ class="exchange-drug-list">';
         console.log('✅ تبادلات نمایش داده شد:', exchanges.length);
     }}
     
-    function cancelExchange(exchangeId) {
+    function cancelExchange(exchangeId) {{
         if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
         
-        fetch('/api/reject_exchange/' + exchangeId, { method: 'POST' })
+        fetch('/api/reject_exchange/' + exchangeId, { method: 'POST' }})
             .then(r => r.json())
-            .then(data => {
-                if (data.success) {
+            .then(data => {{
+                if (data.success) {{
                     showToast('✅ درخواست تبادل لغو شد', 'success');
                     loadExchanges();
                     loadPendingExchanges();
-                } else {
+                }} else {{
                     showToast('❌ خطا: ' + data.error, 'error');
-                }
-            })
+                }}
+            }})
             .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
-    }
+    }}
     
     function confirmPendingExchange(exchangeId) {{
         if(confirm('آیا از تایید این تبادل اطمینان دارید؟')) {{
