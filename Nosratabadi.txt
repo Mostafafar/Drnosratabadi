@@ -2487,19 +2487,22 @@ class="exchange-drug-list">';
     function cancelExchange(exchangeId) {{
         if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
         
-        fetch('/api/reject_exchange/' + exchangeId, { method: 'POST' }})
-            .then(r => r.json())
-            .then(data => {{
-                if (data.success) {{
-                    showToast('✅ درخواست تبادل لغو شد', 'success');
-                    loadExchanges();
-                    loadPendingExchanges();
-                }} else {{
-                    showToast('❌ خطا: ' + data.error, 'error');
-                }}
-            }})
-            .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
-    }}
+        function cancelExchange(exchangeId) {{
+            if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
+    
+            fetch('/api/reject_exchange/' + exchangeId, {{ method: 'POST' }})
+                .then(r => r.json())
+                .then(data => {{
+                    if (data.success) {{
+                        showToast('✅ درخواست تبادل لغو شد', 'success');
+                        loadExchanges();
+                        loadPendingExchanges();
+                    }} else {{
+                        showToast('❌ خطا: ' + data.error, 'error');
+                    }}
+                }})
+                .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
+        }}
     
     function confirmPendingExchange(exchangeId) {{
         if(confirm('آیا از تایید این تبادل اطمینان دارید؟')) {{
