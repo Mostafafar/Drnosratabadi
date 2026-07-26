@@ -2410,79 +2410,79 @@ class="exchange-drug-list">';
     }}
     
     function loadExchanges()
-    {
+    {{
         console.log('🔄 بارگذاری تبادلات...');
         fetch('/api/get_exchanges')
             .then(r => r.json())
-            .then(data => {
+            .then(data => {{
                 console.log('📋 دریافت تبادلات:', data);
                 allMyExchanges = data.exchanges || [];
                 renderMyExchangesList(allMyExchanges);
-            })
-            .catch(err => {
+            }})
+            .catch(err => {{
                 console.error('❌ خطا در دریافت تبادلات:', err);
                 showToast('❌ خطا در دریافت تبادلات', 'error');
-            });
-    }
+            }});
+    }}
     
-    function renderMyExchangesList(exchanges) {
+    function renderMyExchangesList(exchanges) {{
         console.log('🔄 رندرینگ تبادلات:', exchanges);
         const container = document.getElementById('myExchangesList');
         
-        if (!container) {
+        if (!container) {{
             console.error('❌ عنصر myExchangesList پیدا نشد');
             return;
-        }
+        }}
         
-        if (!exchanges || exchanges.length === 0) {
+        if (!exchanges || exchanges.length === 0) {{
             container.innerHTML = '<p style="text-align:center;padding:30px;color:#999;">هیچ تبادلی ثبت نشده است</p>';
             return;
-        }
+        }}
         
         let html = '<div style="max-height:500px;overflow-y:auto;">';
-        exchanges.forEach(ex => {
+        exchanges.forEach(ex => {{
             const statusText = ex.status === 'confirmed' ? '✅ تایید شده' : '⏳ در انتظار';
             const statusColor = ex.status === 'confirmed' ? '#28a745' : '#ffc107';
             const date = new Date(ex.exchange_date);
             
             // نمایش نام داروخانه
             let pharmacyName = ex.buyer_name || 'نامشخص';
-            if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {
+            if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {{
                 pharmacyName = ex.source_pharmacy_name || pharmacyName;
-            }
+            }}
             
             html += `
                 <div style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:8px 0;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
                         <div>
-                            <strong style="font-size:14px;">💊 ${ex.drug_name}</strong>
+                            <strong style="font-size:14px;">💊 ${{ex.drug_name}}</strong>
                             <span style="margin:0 8px;color:#666;">|</span>
-                            <span>📦 ${ex.quantity} عدد</span>
+                            <span>📦 ${{ex.quantity}} عدد</span>
                         </div>
                         <div>
-                            <span style="background:${statusColor};color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:bold;">
-                                ${statusText}
+                            <span style="background:${{statusColor}};color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:bold;">
+                                ${{statusText}}
                             </span>
                         </div>
                     </div>
                     <div style="font-size:12px;color:#999;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">
-                        <span>🏥 ${pharmacyName}</span>
-                        <span>📅 ${date.toLocaleDateString('fa-IR')} ${date.toLocaleTimeString('fa-IR')}</span>
-                        ${ex.expiry_date ? `<span>📅 انقضا: ${ex.expiry_date}</span>` : ''}
+                        <span>🏥 ${{pharmacyName}}</span>
+                        <span>📅 ${{date.toLocaleDateString('fa-IR')}} ${{date.toLocaleTimeString('fa-IR')}}</span>
+                        ${{ex.expiry_date ? `<span>📅 انقضا: ${{ex.expiry_date}}</span>` : ''}}
                     </div>
-                    ${ex.status === 'pending' ? `
+                    ${{ex.status === 'pending' ? `
                     <div style="margin-top:8px;">
-                        <button onclick="cancelExchange(${ex.id})" class="btn-danger btn-sm" style="font-size:11px;padding:2px 8px;">
+                        <button onclick="cancelExchange(${{ex.id}})" class="btn-danger btn-sm" style="font-size:11px;padding:2px 8px;">
                             ❌ لغو درخواست
                         </button>
-                    </div>` : ''}
+                    </div>` : ''}}
                 </div>
             `;
-        });
+        }});
         html += '</div>';
         container.innerHTML = html;
         console.log('✅ تبادلات نمایش داده شد:', exchanges.length);
-    }
+    }}
     
     function cancelExchange(exchangeId) {
         if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
