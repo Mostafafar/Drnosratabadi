@@ -2485,39 +2485,31 @@ class="exchange-drug-list">';
             const statusColor = ex.status === 'confirmed' ? '#28a745' : '#ffc107';
             const date = new Date(ex.exchange_date);
             
-            // نمایش نام داروخانه
             let pharmacyName = ex.buyer_name || 'نامشخص';
             if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {{
                 pharmacyName = ex.source_pharmacy_name || pharmacyName;
             }}
             
-            html += `
-                <div style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:8px 0;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                        <div>
-                            <strong style="font-size:14px;">💊 $${ex.drug_name}</strong>
-                            <span style="margin:0 8px;color:#666;">|</span>
-                            <span>📦 $${ex.quantity} عدد</span>
-                        </div>
-                        <div>
-                            <span style="background:$${statusColor};color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:bold;">
-                                $${statusText}
-                            </span>
-                        </div>
-                    </div>
-                    <div style="font-size:12px;color:#999;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">
-                        <span>🏥 $${pharmacyName}</span>
-                        <span>📅 $${date.toLocaleDateString('fa-IR')} $${date.toLocaleTimeString('fa-IR')}</span>
-                        $${ex.expiry_date ? `<span>📅 انقضا: $${ex.expiry_date}</span>` : ''}
-                    </div>
-                    $${ex.status === 'pending' ? `
-                    <div style="margin-top:8px;">
-                        <button onclick="cancelExchange($${ex.id})" class="btn-danger btn-sm" style="font-size:11px;padding:2px 8px;">
-                            ❌ لغو درخواست
-                        </button>
-                    </div>` : ''}
-                </div>
-            `;
+            html += '<div style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:8px 0;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.05);">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
+            html += '<div><strong style="font-size:14px;">💊 ' + ex.drug_name + '</strong>';
+            html += '<span style="margin:0 8px;color:#666;">|</span>';
+            html += '<span>📦 ' + ex.quantity + ' عدد</span></div>';
+            html += '<div><span style="background:' + statusColor + ';color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:bold;">' + statusText + '</span></div>';
+            html += '</div>';
+            html += '<div style="font-size:12px;color:#999;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">';
+            html += '<span>🏥 ' + pharmacyName + '</span>';
+            html += '<span>📅 ' + date.toLocaleDateString('fa-IR') + ' ' + date.toLocaleTimeString('fa-IR') + '</span>';
+            if (ex.expiry_date) {{
+                html += '<span>📅 انقضا: ' + ex.expiry_date + '</span>';
+            }}
+            html += '</div>';
+            if (ex.status === 'pending') {{
+                html += '<div style="margin-top:8px;">';
+                html += '<button onclick="cancelExchange(' + ex.id + ')" class="btn-danger btn-sm" style="font-size:11px;padding:2px 8px;">❌ لغو درخواست</button>';
+                html += '</div>';
+            }}
+            html += '</div>';
         }});
         html += '</div>';
         container.innerHTML = html;
@@ -2631,6 +2623,10 @@ class="exchange-drug-list">';
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='🔄 تبادل دارو', session=session)
+
+                            
+    
+    
 # ===== ادامه در بخش بعدی =====
 # ===== دفتر کسری =====
 @app.route('/deficit')
