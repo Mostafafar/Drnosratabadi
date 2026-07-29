@@ -1144,6 +1144,7 @@ def register():
 def logout():
     session.clear()
     return redirect(url_for('index'))
+
 # ===== داشبورد =====
 @app.route('/dashboard')
 @login_required
@@ -1339,6 +1340,7 @@ def dashboard():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='📊 داشبورد', session=session)
+
 # ===== انبارداری =====
 @app.route('/inventory')
 @login_required
@@ -2375,30 +2377,30 @@ def exchange():
     }}
     
     // ===== تابع اصلی نمایش تبادلات (اصلاح شده) =====
-    function renderMyExchangesList(exchanges) {
+    function renderMyExchangesList(exchanges) {{
         console.log('🔄 رندرینگ تبادلات:', exchanges);
         const container = document.getElementById('myExchangesList');
         
-        if (!container) {
+        if (!container) {{
             console.error('❌ عنصر myExchangesList پیدا نشد');
             return;
-        }
+        }}
         
-        if (!exchanges || exchanges.length === 0) {
+        if (!exchanges || exchanges.length === 0) {{
             container.innerHTML = '<p style="text-align:center;padding:30px;color:#999;">هیچ تبادلی ثبت نشده است</p>';
             return;
-        }
+        }}
         
         let html = '<div style="max-height:500px;overflow-y:auto;">';
-        exchanges.forEach(ex => {
+        exchanges.forEach(ex => {{
             const statusText = ex.status === 'confirmed' ? '✅ تایید شده' : '⏳ در انتظار';
             const statusColor = ex.status === 'confirmed' ? '#28a745' : '#ffc107';
             const date = new Date(ex.exchange_date);
             
             let pharmacyName = ex.buyer_name || 'نامشخص';
-            if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {
+            if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {{
                 pharmacyName = ex.source_pharmacy_name || pharmacyName;
-            }
+            }}
             
             html += '<div style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:8px 0;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.05);">';
             html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
@@ -2410,53 +2412,53 @@ def exchange():
             html += '<div style="font-size:12px;color:#999;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">';
             html += '<span>🏥 ' + pharmacyName + '</span>';
             html += '<span>📅 ' + date.toLocaleDateString('fa-IR') + ' ' + date.toLocaleTimeString('fa-IR') + '</span>';
-            if (ex.expiry_date) {
+            if (ex.expiry_date) {{
                 html += '<span>📅 انقضا: ' + ex.expiry_date + '</span>';
-            }
+            }}
             html += '</div>';
-            if (ex.status === 'pending') {
+            if (ex.status === 'pending') {{
                 html += '<div style="margin-top:8px;">';
                 html += '<button onclick="cancelExchange(' + ex.id + ')" class="btn-danger btn-sm" style="font-size:11px;padding:2px 8px;">❌ لغو درخواست</button>';
                 html += '</div>';
-            }
+            }}
             html += '</div>';
-        });
+        }});
         html += '</div>';
         container.innerHTML = html;
         console.log('✅ تبادلات نمایش داده شد:', exchanges.length);
-    }
+    }}
     
-    function loadExchanges() {
+    function loadExchanges() {{
         console.log('🔄 بارگذاری تبادلات...');
         fetch('/api/get_exchanges')
             .then(r => r.json())
-            .then(data => {
+            .then(data => {{
                 console.log('📋 دریافت تبادلات:', data);
                 allMyExchanges = data.exchanges || [];
                 renderMyExchangesList(allMyExchanges);
-            })
-            .catch(err => {
+            }})
+            .catch(err => {{
                 console.error('❌ خطا در دریافت تبادلات:', err);
                 showToast('❌ خطا در دریافت تبادلات', 'error');
-            });
-    }
+            }});
+    }}
     
-    function cancelExchange(exchangeId) {
+    function cancelExchange(exchangeId) {{
         if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
         
-        fetch('/api/reject_exchange/' + exchangeId, { method: 'POST' })
+        fetch('/api/reject_exchange/' + exchangeId, {{ method: 'POST' }})
             .then(r => r.json())
-            .then(data => {
-                if (data.success) {
+            .then(data => {{
+                if (data.success) {{
                     showToast('✅ درخواست تبادل لغو شد', 'success');
                     loadExchanges();
                     loadPendingExchanges();
-                } else {
+                }} else {{
                     showToast('❌ خطا: ' + data.error, 'error');
-                }
-            })
+                }}
+            }})
             .catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
-    }
+    }}
     
     function loadPendingExchanges() {{
         fetch('/api/get_pending_exchanges')
@@ -3577,8 +3579,6 @@ def get_exchanges():
     
     logging.info(f"🔍 Getting exchanges for user_id: {user_id}")
     
-    # دریافت تمام تبادلاتی که کاربر در آنها نقش دارد
-    # کاربر می‌تواند به عنوان user_id، target_pharmacy_id یا source_pharmacy_id باشد
     cursor = db.execute("""
         SELECT * FROM exchanges 
         WHERE user_id = ? 
