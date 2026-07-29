@@ -3577,8 +3577,6 @@ def get_exchanges():
     db = get_db()
     user_id = session['user_id']
     
-    logging.info(f"🔍 Getting exchanges for user_id: {user_id}")
-    
     cursor = db.execute("""
         SELECT * FROM exchanges 
         WHERE user_id = ? 
@@ -3587,11 +3585,18 @@ def get_exchanges():
         ORDER BY exchange_date DESC
     """, (user_id, user_id, user_id))
     
-    exchanges = [dict(row) for row in cursor.fetchall()]
-    
-    logging.info(f"✅ Found {len(exchanges)} exchanges for user {user_id}")
-    for ex in exchanges:
-        logging.info(f"   Exchange {ex['id']}: user_id={ex['user_id']}, target={ex.get('target_pharmacy_id')}, source={ex.get('source_pharmacy_id')}, status={ex['status']}, drug={ex['drug_name']}")
+    exchanges = []
+    for row in cursor.fetchall():
+        ex = dict(row)
+        # ✅ تبدیل به وقت ایران (UTC+3:30)
+        if ex.get('exchange_date'):
+            try:
+                dt = datetime.fromisoformat(ex['exchange_date'])
+                iran_time = dt + timedelta(hours=3, minutes=30)
+                ex['exchange_date'] = iran_time.isoformat()
+            except:
+                pass
+        exchanges.append(ex)
     
     return jsonify({'exchanges': exchanges})
 
@@ -3876,12 +3881,17 @@ def get_all_pharmacies_drugs_grouped_by_expiry():
     result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
     return jsonify({'data': result})
 
+
 @app.route('/api/get_my_drugs_for_exchange')
 @login_required
 def get_my_drugs_for_exchange():
-    user_id = session['user_id']
+    user_id = session['user_id']  # ✅ کاربر جاری
     db = get_db()
-    cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", (user_id,))
+    # ✅ فقط داروهای کاربر جاری
+    cursor = db.execute(
+        "SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", 
+        (user_id,)
+    )
     return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
 
 @app.route('/api/get_pharmacy_drugs_for_exchange')
