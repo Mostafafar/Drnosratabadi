@@ -3,7 +3,7 @@ cat > /var/www/poldaroo/complete_pharmacy.py << 'EOF'
 # ============================================
 # complete_pharmacy.py
 # سیستم مدیریت داروخانه با تمام امکانات
-# نسخه اصلاح شده - فروردین 1405
+# نسخه کامل - فروردین 1405
 # ============================================
 import sqlite3
 import hashlib
@@ -20,7 +20,6 @@ import sys
 from datetime import datetime, timedelta
 
 def get_iran_time_iso():
-    """دریافت زمان فعلی به وقت ایران (UTC+3:30) بدون نیاز به pytz"""
     iran_time = datetime.utcnow() + timedelta(hours=3, minutes=30)
     return iran_time.isoformat()
 
@@ -37,25 +36,20 @@ DATABASE = 'pharmacy.db'
 def gregorian_to_jalali(gy, gm, gd):
     g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
-
     gy = gy - 1600
     gm = gm - 1
     gd = gd - 1
-
     g_day_no = 365 * gy + (gy + 3) // 4 - (gy + 99) // 100 + (gy + 399) // 400
-
     for i in range(gm):
         g_day_no += g_days_in_month[i]
     if gm > 1 and ((gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0)):
         g_day_no += 1
     g_day_no += gd
-
     j_day_no = g_day_no - 226899
     jy = (j_day_no * 100 + 322) // 36525
     j_rem = j_day_no - (jy * 36525 + 322) // 100
     jm = (j_rem * 1000 + 60000) // 1000000
     jd = j_rem - (jm * 1000000 + 60000) // 1000
-
     if jm == 0:
         jm = 12
         jy -= 1
@@ -66,7 +60,6 @@ def gregorian_to_jalali(gy, gm, gd):
     else:
         if jd > 30:
             jd = 30
-
     return f"{jy:04d}/{jm:02d}/{jd:02d}"
 
 def convert_date_to_jalali(date_str):
@@ -89,10 +82,8 @@ def get_current_jalali_date():
 def get_year_month_selectors(expiry_value=''):
     current_year = datetime.now().year
     current_month = datetime.now().month
-    
     selected_year = current_year
     selected_month = current_month
-    
     if expiry_value and '.' in expiry_value:
         try:
             parts = expiry_value.split('.')
@@ -100,18 +91,15 @@ def get_year_month_selectors(expiry_value=''):
             selected_month = int(parts[1])
         except:
             pass
-    
     year_options = ''
     for y in range(current_year - 5, current_year + 6):
         selected = 'selected' if y == selected_year else ''
         year_options += f'<option value="{y}" {selected}>{y}</option>'
-    
     month_options = ''
     for m in range(1, 13):
         selected = 'selected' if m == selected_month else ''
         month_label = f'{m:02d}'
         month_options += f'<option value="{m:02d}" {selected}>{month_label}</option>'
-    
     return f'''
     <div class="expiry-selectors" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <div style="display:flex;align-items:center;gap:4px;">
@@ -187,11 +175,9 @@ def get_expiry_status(expiry_date):
             month = int(parts[1])
         else:
             return {'text': 'نامعتبر', 'class': ''}
-        
         now = datetime.now()
         exp = datetime(year, month, 1)
         months_left = (exp.year - now.year) * 12 + (exp.month - now.month)
-        
         if months_left < 0:
             return {'text': 'منقضی', 'class': 'expired'}
         elif months_left <= 3:
@@ -216,7 +202,6 @@ def cleanup_expired_items():
 
 def init_db():
     db = get_db()
-    
     db.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL UNIQUE,
@@ -228,7 +213,6 @@ def init_db():
         address TEXT,
         is_approved INTEGER DEFAULT 1
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS drugs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -240,7 +224,6 @@ def init_db():
         ordered BOOLEAN DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -250,7 +233,6 @@ def init_db():
         ordered_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS inventory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -267,7 +249,6 @@ def init_db():
         category TEXT DEFAULT 'other',
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -282,12 +263,10 @@ def init_db():
         created_at TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS companies (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS exchanges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -309,21 +288,18 @@ def init_db():
         source_pharmacy_name TEXT DEFAULT '',
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS user_categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL UNIQUE,
         categories TEXT DEFAULT '',
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS hidden_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         item_id INTEGER NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS interviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         pharmacist_name TEXT NOT NULL,
@@ -336,7 +312,6 @@ def init_db():
         is_published INTEGER DEFAULT 1,
         views INTEGER DEFAULT 0
     )''')
-    
     db.execute('''CREATE TABLE IF NOT EXISTS announcements (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -347,56 +322,42 @@ def init_db():
     
     try:
         db.execute("ALTER TABLE users ADD COLUMN phone_number TEXT")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE users ADD COLUMN address TEXT")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_approved INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE interviews ADD COLUMN audio_url TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE inventory ADD COLUMN category TEXT DEFAULT 'other'")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN sender_categories TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN my_items_json TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN target_items_json TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN source_pharmacy_id INTEGER DEFAULT NULL")
-    except sqlite3.OperationalError:
+    except:
         pass
-    
     try:
         db.execute("ALTER TABLE exchanges ADD COLUMN source_pharmacy_name TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    
-    try:
-        db.execute("UPDATE users SET is_approved = 1 WHERE is_approved IS NULL")
     except:
         pass
     
@@ -473,7 +434,6 @@ def admin_required(f):
             return "⛔ دسترسی غیرمجاز. فقط ادمین می‌تواند وارد این بخش شود.", 403
         return f(*args, **kwargs)
     return decorated
-
 # ===== قالب HTML یکپارچه =====
 HTML = '''<!DOCTYPE html>
 <html dir="rtl" lang="fa">
@@ -520,7 +480,6 @@ HTML = '''<!DOCTYPE html>
         .topbar .nav-links .btn-logout:hover { background: #c82333; }
         .topbar .user-badge { background: #333; padding: 3px 10px; border-radius: 20px; font-size: 11px; color: #aaa; }
         .topbar .user-badge strong { color: white; }
-        
         .sidebar {
             position: fixed;
             right: 0;
@@ -547,14 +506,12 @@ HTML = '''<!DOCTYPE html>
         .sidebar-menu a:hover { background: #333; color: white; }
         .sidebar-menu a.active { background: #2c2c2c; border-right: 3px solid #4fc3f7; }
         .sidebar-menu .admin-link { border-right: 3px solid #ffc107; }
-        
         .main-content {
             margin-right: 200px;
             margin-top: 46px;
             padding: 15px;
             min-height: calc(100vh - 46px);
         }
-        
         .header {
             background: white;
             border-radius: 10px;
@@ -567,7 +524,6 @@ HTML = '''<!DOCTYPE html>
         }
         .page-title { font-size: 17px; font-weight: 600; }
         .user-info { display: flex; gap: 12px; align-items: center; font-size: 12px; }
-        
         .card {
             background: white;
             border-radius: 10px;
@@ -582,7 +538,6 @@ HTML = '''<!DOCTYPE html>
             padding-bottom: 6px;
             border-bottom: 2px solid #e0e0e0;
         }
-        
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -598,7 +553,6 @@ HTML = '''<!DOCTYPE html>
         }
         .stat-card .number { font-size: 22px; font-weight: bold; }
         .stat-card .label { color: #666; font-size: 11px; margin-top: 4px; }
-        
         .form-row {
             display: flex;
             gap: 8px;
@@ -615,7 +569,6 @@ HTML = '''<!DOCTYPE html>
             font-size: 13px;
         }
         .form-row textarea { min-height: 70px; resize: vertical; }
-        
         button {
             background: #1a1a1a;
             color: white;
@@ -632,13 +585,11 @@ HTML = '''<!DOCTYPE html>
         .btn-warning { background: #ffc107; color: #1a1a1a; }
         .btn-primary { background: #007bff; }
         .btn-sm { padding: 3px 8px; font-size: 11px; }
-        
         .table-responsive { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         table th, table td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #eee; }
         table th { background: #f0f0f0; font-weight: bold; }
         table tr:hover { background: #f9f9f9; }
-        
         .badge {
             display: inline-block;
             padding: 2px 8px;
@@ -649,7 +600,6 @@ HTML = '''<!DOCTYPE html>
         .badge-danger { background: #f8d7da; color: #721c24; }
         .badge-warning { background: #fff3cd; color: #856404; }
         .badge-info { background: #d1ecf1; color: #0c5460; }
-        
         .interview-card {
             background: white;
             border-radius: 10px;
@@ -663,17 +613,14 @@ HTML = '''<!DOCTYPE html>
         .interview-card .media { margin-top: 8px; }
         .interview-card .media img { max-width: 100%; border-radius: 6px; max-height: 300px; }
         .interview-card .media audio { width: 100%; }
-        
         .exchange-tab { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
         .exchange-tab button { background: none; color: #1a1a1a; border: none; padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 0; }
         .exchange-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        
         .deficit-table { width: 100%; border-collapse: collapse; }
         .deficit-table th, .deficit-table td { padding: 8px; text-align: center; border-bottom: 1px solid #eee; }
         .deficit-table th { background: #f0f0f0; font-weight: bold; }
-        
         .search-container { position: relative; flex: 1; }
         .suggestions-list {
             position: absolute;
@@ -692,7 +639,6 @@ HTML = '''<!DOCTYPE html>
         .suggestions-list div { padding: 8px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; }
         .suggestions-list div:hover { background: #f0f0f0; }
         .suggestions-list .stock-info { font-size: 11px; color: #666; margin-top: 3px; }
-        
         .exchange-dual-container { display: flex; gap: 15px; flex-wrap: wrap; }
         .exchange-list-box { flex: 1; min-width: 250px; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .exchange-list-header { background: #1a1a1a; color: white; padding: 10px; text-align: center; font-weight: bold; font-size: 13px; }
@@ -701,35 +647,28 @@ HTML = '''<!DOCTYPE html>
         .exchange-drug-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #eee; cursor: pointer; border-radius: 4px; font-size: 13px; }
         .exchange-drug-item:hover { background: #f5f5f5; }
         .exchange-drug-item.selected { background: #d4edda; }
-        
         .exchange-card { background: white; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; border: 1px solid #e0e0e0; }
         .exchange-card-header { background: #1a1a1a; color: white; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
         .exchange-card-footer { padding: 8px 14px; background: #f8f9fa; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid #e0e0e0; }
         .status-pending { background: #ffc107; color: #1a1a1a; padding: 2px 8px; border-radius: 20px; font-size: 11px; }
         .status-confirmed { background: #28a745; color: white; padding: 2px 8px; border-radius: 20px; font-size: 11px; }
-        
         .drugs-columns { display: flex; gap: 15px; flex-wrap: wrap; }
         .drugs-column { flex: 1; min-width: 220px; background: #fafafa; border-radius: 10px; padding: 10px; }
         .drugs-column h4 { margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid #ddd; font-size: 14px; }
-        
         .dashboard-tab { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
         .dashboard-tab button { background: none; color: #1a1a1a; border: none; padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 0; }
         .dashboard-tab button.active { border-bottom: 3px solid #1a1a1a; font-weight: bold; }
-        
         .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
         .toolbar button { font-size: 11px; padding: 5px 12px; }
         .export-btn { background: #17a2b8; }
-        
         .expiry-tab { border: 1px solid #e0e0e0; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
         .expiry-tab-header { padding: 10px 14px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
         .expiry-tab-body { display: none; padding: 8px 12px; background: #fafafa; }
         .expiry-tab-body.show { display: block; }
-        
         .pharmacy-group { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
         .pharmacy-group-header { background: #f0f0f0; padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px; font-weight: bold; font-size: 13px; }
         .pharmacy-group-body { display: none; padding: 6px 10px; background: white; }
         .pharmacy-group-body.show { display: block; }
-        
         .drug-item { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; font-size: 13px; }
         .drug-item:last-child { border-bottom: none; }
         .drug-item .drug-name { font-weight: bold; flex: 1; min-width: 80px; }
@@ -737,7 +676,6 @@ HTML = '''<!DOCTYPE html>
         .drug-item .drug-location { font-size: 10px; padding: 2px 6px; border-radius: 10px; }
         .location-warehouse { background: #cfe2ff; color: #084298; }
         .location-pharmacy { background: #d1e7dd; color: #0a3622; }
-        
         .toast-message {
             position: fixed;
             bottom: 20px;
@@ -756,18 +694,8 @@ HTML = '''<!DOCTYPE html>
         .toast-message.success { background: #28a745; }
         .toast-message.error { background: #dc3545; }
         .toast-message.info { background: #17a2b8; }
-        
-        .drug-item .drug-actions {
-            display: flex;
-            gap: 4px;
-            align-items: center;
-        }
-        .drug-item .drug-actions button {
-            padding: 2px 6px;
-            font-size: 10px;
-            border-radius: 4px;
-        }
-        
+        .drug-item .drug-actions { display: flex; gap: 4px; align-items: center; }
+        .drug-item .drug-actions button { padding: 2px 6px; font-size: 10px; border-radius: 4px; }
         @media (max-width: 768px) {
             .sidebar { width: 55px; }
             .sidebar .menu-text { display: none; }
@@ -801,7 +729,6 @@ HTML = '''<!DOCTYPE html>
             {% endif %}
         </div>
     </div>
-    
     <div class="sidebar">
         <ul class="sidebar-menu">
             <li><a href="/"><span>🏠</span> <span class="menu-text">صفحه اصلی</span></a></li>
@@ -814,7 +741,6 @@ HTML = '''<!DOCTYPE html>
             {% endif %}
         </ul>
     </div>
-    
     <div class="main-content">
         <div class="header">
             <div class="page-title">{{ page_title }}</div>
@@ -828,7 +754,6 @@ HTML = '''<!DOCTYPE html>
         </div>
         {{ content|safe }}
     </div>
-    
     <script>
         function showToast(message, type) {
             var toast = document.getElementById('toast');
@@ -839,7 +764,6 @@ HTML = '''<!DOCTYPE html>
                 toast.style.display = 'none';
             }, 3000);
         }
-        
         function confirmAction(message, callback) {
             if (confirm(message)) {
                 callback();
@@ -848,7 +772,6 @@ HTML = '''<!DOCTYPE html>
     </script>
 </body>
 </html>'''
-
 # ===== روت‌های اصلی =====
 
 @app.route('/')
@@ -858,11 +781,7 @@ def index():
     interviews = cursor.fetchall()
     cursor = db.execute("SELECT * FROM announcements WHERE is_active = 1 ORDER BY created_at DESC LIMIT 3")
     announcements = cursor.fetchall()
-    
-    content = '''
-    <div class="card">
-        <div class="card-title">🎙️ مصاحبه با داروسازان</div>
-    '''
+    content = '<div class="card"><div class="card-title">🎙️ مصاحبه با داروسازان</div>'
     if interviews:
         for i in interviews:
             content += f'''
@@ -879,7 +798,6 @@ def index():
     else:
         content += '<p style="text-align:center;padding:30px;color:#999;">هنوز مصاحبه‌ای ثبت نشده است</p>'
     content += '</div>'
-    
     if announcements:
         content += '''
         <div class="card" style="background:#e3f2fd;border:1px solid #90caf9;">
@@ -894,7 +812,6 @@ def index():
             </div>
             '''
         content += '</div>'
-    
     return render_template_string(HTML, content=content, page_title='صفحه اصلی', session=session)
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -905,13 +822,11 @@ def login():
         db = get_db()
         cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
         user = cursor.fetchone()
-        
         if user and user['password_hash'] == hash_password(password):
             try:
                 is_approved = user['is_approved']
-            except (KeyError, IndexError):
+            except:
                 is_approved = 1
-            
             if is_approved == 0:
                 return '''
                 <!DOCTYPE html>
@@ -934,7 +849,6 @@ def login():
                 </body>
                 </html>
                 '''
-            
             if is_approved == 2:
                 return '''
                 <!DOCTYPE html>
@@ -957,7 +871,6 @@ def login():
                 </body>
                 </html>
                 '''
-            
             session.clear()
             session['logged_in'] = True
             session['user_id'] = user['id']
@@ -1037,19 +950,14 @@ def register():
         
         if not username or not password or not pharmacy_name:
             return '❌ همه فیلدهای اجباری را پر کنید'
-        
         if len(username) < 3:
             return '❌ نام کاربری باید حداقل 3 کاراکتر باشد'
-        
         if len(password) < 4:
             return '❌ رمز عبور باید حداقل 4 کاراکتر باشد'
-        
         if password != confirm_password:
             return '❌ رمز عبور و تکرار آن مطابقت ندارند'
-        
         if ' ' in username:
             return '❌ نام کاربری نباید شامل فاصله باشد'
-        
         if phone_number and not re.match(r'^09[0-9]{9}$', phone_number):
             return '❌ شماره همراه نامعتبر است. فرمت صحیح: 09121234567'
         
@@ -1114,23 +1022,17 @@ def register():
         <form method="post">
             <div class="field-label">نام کاربری *</div>
             <input type="text" name="username" placeholder="حداقل 3 کاراکتر (هر زبانی)" required>
-            
             <div class="field-label">رمز عبور *</div>
             <input type="password" name="password" placeholder="حداقل 4 کاراکتر" required>
-            
             <div class="field-label">تکرار رمز عبور *</div>
             <input type="password" name="confirm_password" placeholder="تکرار رمز عبور" required>
-            
             <div class="field-label">نام داروخانه *</div>
             <input type="text" name="pharmacy_name" placeholder="نام کامل داروخانه" required>
-            
             <div class="field-label">شماره همراه</div>
             <input type="tel" name="phone_number" placeholder="مثال: 09121234567">
             <div class="help-text">فرمت: 09XXXXXXXXX</div>
-            
             <div class="field-label">آدرس</div>
             <input type="text" name="address" placeholder="آدرس کامل داروخانه">
-            
             <button type="submit">ثبت‌نام</button>
         </form>
         <a href="/login" class="login-link">← قبلاً ثبت‌نام کرده‌اید؟ ورود</a>
@@ -1144,7 +1046,6 @@ def register():
 def logout():
     session.clear()
     return redirect(url_for('index'))
-
 # ===== داشبورد =====
 @app.route('/dashboard')
 @login_required
@@ -1340,7 +1241,6 @@ def dashboard():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='📊 داشبورد', session=session)
-
 # ===== انبارداری =====
 @app.route('/inventory')
 @login_required
@@ -1517,10 +1417,8 @@ def inventory():
     function copySelectedItems() {{
         var ids = getSelectedItemIds();
         if(ids.length === 0) {{ showToast('هیچ آیتمی انتخاب نشده است', 'error'); return; }}
-        
         var text = "📋 لیست داروهای انتخاب شده\\n";
         text += "📅 " + new Date().toLocaleDateString('fa-IR') + "\\n─────────────────────\\n";
-        
         inventoryData.forEach(tab => {{
             if(!tab || !tab.pharmacies) return;
             tab.pharmacies.forEach(ph => {{
@@ -1532,12 +1430,7 @@ def inventory():
                 }});
             }});
         }});
-        
-        if(text.length > 5000) {{
-            showToast('گزارش بیش از حد بزرگ است', 'error');
-            return;
-        }}
-        
+        if(text.length > 5000) {{ showToast('گزارش بیش از حد بزرگ است', 'error'); return; }}
         var textarea = document.createElement('textarea');
         textarea.value = text;
         document.body.appendChild(textarea);
@@ -1623,14 +1516,12 @@ def inventory():
     function renderInventory() {{
         var container = document.getElementById('inventoryContainer');
         if (!container) return;
-        
         var filtered = inventoryData.filter(tab => {{
             if(!currentFilter) return true;
             return tab.pharmacies.some(ph => 
                 ph.drugs.some(d => d.name.toLowerCase().includes(currentFilter))
             );
         }});
-        
         var totalVisible = 0;
         filtered.forEach(tab => {{
             tab.pharmacies.forEach(ph => {{
@@ -1639,15 +1530,12 @@ def inventory():
                 }});
             }});
         }});
-        
         document.getElementById('stats').innerHTML = '<div class="stat-card"><div class="number">' + filtered.length + '</div><div class="label">تاریخ انقضا</div></div>' +
             '<div class="stat-card"><div class="number">' + totalVisible + '</div><div class="label">مجموع اقلام</div></div>';
-        
         if(filtered.length === 0) {{
             container.innerHTML = '<p style="text-align:center;padding:40px;color:#999">انبار خالی است</p>';
             return;
         }}
-        
         var html = '';
         filtered.forEach((tab, idx) => {{
             var status = getExpiryStatusText(tab.expiry_date);
@@ -1661,7 +1549,6 @@ def inventory():
             html += ' | 🏥 ' + tab.pharmacies.length + ' داروخانه | 📦 ' + totalQty + ' عدد</span>';
             html += '</div>';
             html += '<div class="expiry-tab-body ' + isOpen + '">';
-            
             tab.pharmacies.forEach((ph, phIdx) => {{
                 var visibleDrugs = ph.drugs.filter(d => (!d.hidden || showHidden) && d.name.toLowerCase().includes(currentFilter));
                 if(visibleDrugs.length === 0) return;
@@ -1689,7 +1576,6 @@ def inventory():
                 }});
                 html += '</div></div>';
             }});
-            
             html += '</div></div>';
         }});
         container.innerHTML = html;
@@ -1789,12 +1675,10 @@ def inventory():
         var qty = document.getElementById('invQty').value;
         var formRow = document.getElementById('invName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
-        
         if(!name || !qty || !expiry) {{
             showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error');
             return;
         }}
-        
         var fd = new FormData();
         fd.append('name', name);
         fd.append('quantity', qty);
@@ -1802,7 +1686,6 @@ def inventory():
         fd.append('location', document.getElementById('location').value);
         fd.append('supplier', document.getElementById('supplier').value);
         fd.append('purchase_price', document.getElementById('price').value);
-        
         fetch('/api/add_inventory', {{
             method: 'POST',
             body: fd
@@ -1830,7 +1713,6 @@ def inventory():
         var qty = document.getElementById('saleQty').value;
         var formRow = document.getElementById('saleDrugName').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
-        
         if(!name || !qty || !expiry) {{ showToast('نام دارو، تعداد و تاریخ انقضا اجباری است', 'error'); return; }}
         fetch('/api/register_sale', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{
             drug_name: name, quantity: parseInt(qty), expiry_date: expiry,
@@ -1857,7 +1739,6 @@ def inventory():
         var toLoc = document.getElementById('moveToLocation').value;
         var formRow = document.getElementById('moveDrug').closest('.form-row');
         var expiry = getExpiryFromSelectors(formRow);
-        
         if(!name || !qty || !expiry){{ showToast('نام دارو، تعداد و تاریخ انقضا را وارد کنید', 'error'); return; }}
         fetch('/api/move_inventory', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{name:name, quantity:parseInt(qty), from_location:fromLoc, to_location:toLoc, expiry_date:expiry}}) }})
             .then(r=>r.json())
@@ -1896,8 +1777,6 @@ def inventory():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='📦 انبارداری', session=session)
-
-
 # ===== تبادل دارو =====
 @app.route('/exchange')
 @login_required
@@ -2100,26 +1979,22 @@ def exchange():
         var container = document.getElementById('exchangeAllDrugsContainer');
         var filter = document.getElementById('drugFilter').value.toLowerCase();
         var targetPharmacy = document.getElementById('targetPharmacySelect').value;
-        
         var filtered = exchangeAllDrugsData.filter(tab => {{
             if(!filter) return true;
             return tab.pharmacies.some(ph => 
                 ph.drugs.some(d => d.name.toLowerCase().includes(filter) && !hiddenIds.has(d.id))
             );
         }});
-        
         if(targetPharmacy !== 'all') {{
             filtered = filtered.map(tab => {{
                 var newPh = tab.pharmacies.filter(ph => ph.pharmacy_id == targetPharmacy);
                 return {{...tab, pharmacies: newPh}};
             }}).filter(tab => tab.pharmacies.length > 0);
         }}
-        
         if(filtered.length === 0) {{
             container.innerHTML = '<div style="text-align:center;padding:30px;color:#999">هیچ دارویی یافت نشد</div>';
             return;
         }}
-        
         var html = '';
         filtered.forEach((tab, idx) => {{
             var status = getExpiryStatusText(tab.expiry_date);
@@ -2133,7 +2008,6 @@ def exchange():
             html += ' | 🏥 ' + tab.pharmacies.length + ' داروخانه | 📦 ' + totalQty + ' عدد</span>';
             html += '</div>';
             html += '<div class="expiry-tab-body ' + isOpen + '">';
-            
             tab.pharmacies.forEach((ph, phIdx) => {{
                 var visibleDrugs = ph.drugs.filter(d => !hiddenIds.has(d.id) && d.name.toLowerCase().includes(filter));
                 if(visibleDrugs.length === 0) return;
@@ -2158,7 +2032,6 @@ def exchange():
                 }});
                 html += '</div></div>';
             }});
-            
             html += '</div></div>';
         }});
         container.innerHTML = html;
@@ -2176,7 +2049,6 @@ def exchange():
             showToast('❌ شما نمی‌توانید از دو داروخانه مختلف به طور همزمان انتخاب کنید.', 'error');
             return;
         }}
-        
         if(pharmacyId == USER_ID) {{
             if(selectedTargetPharmacy !== null && selectedTargetPharmacy != USER_ID) {{
                 showToast('❌ شما در حال انتخاب از داروهای خود هستید، اما قبلاً داروخانه هدف دیگری انتخاب کرده‌اید.', 'error');
@@ -2184,14 +2056,27 @@ def exchange():
             }}
             selectedTargetPharmacy = null;
             selectedTargetPharmacyName = '';
-            
             var drug = myDrugs.find(d => d.id === drugId);
             if(drug) {{
                 toggleDrugSelection('my', drugId, drugName, drug.quantity, expiryDate, USER_ID);
                 document.getElementById('exchangeDualView').style.display = 'block';
                 loadDrugsForExchange();
             }} else {{
-                showToast('این دارو در لیست داروهای من موجود نیست', 'error');
+                fetch('/api/get_my_drugs_for_exchange')
+                    .then(r=>r.json())
+                    .then(data=>{{
+                        myDrugs = sortByExpiryDate(data.drugs || []);
+                        renderMyDrugsList();
+                        var newDrug = myDrugs.find(d => d.id === drugId);
+                        if(newDrug) {{
+                            toggleDrugSelection('my', drugId, drugName, newDrug.quantity, expiryDate, USER_ID);
+                            document.getElementById('exchangeDualView').style.display = 'block';
+                            loadDrugsForExchange();
+                        }} else {{
+                            showToast('این دارو در لیست داروهای من موجود نیست', 'error');
+                        }}
+                    }})
+                    .catch(()=> showToast('❌ خطا در دریافت داروهای من', 'error'));
                 return;
             }}
         }} else {{
@@ -2202,7 +2087,6 @@ def exchange():
                 showToast('❌ شما نمی‌توانید از دو داروخانه مختلف انتخاب کنید.', 'error');
                 return;
             }}
-            
             var drug = targetDrugs.find(d => d.id === drugId);
             if(drug) {{
                 toggleDrugSelection('target', drugId, drugName, drug.quantity, expiryDate, pharmacyId);
@@ -2227,7 +2111,6 @@ def exchange():
                 return;
             }}
         }}
-        
         renderExchangeAllDrugs();
     }}
     
@@ -2346,13 +2229,10 @@ def exchange():
         var targetItems = selectedItems.filter(item => item.source === 'target');
         if(myItems.length === 0 && targetItems.length === 0) {{ showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }}
         if(!selectedTargetPharmacy) {{ showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }}
-        
         var summary = '';
         if(myItems.length > 0) {{ summary += '📦 داروهایی که می‌دهم:\\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\\n'); }}
         if(targetItems.length > 0) {{ summary += '\\n🏥 داروهایی که می‌گیرم:\\n'; targetItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد (از ' + selectedTargetPharmacyName + ')\\n'); }}
-        
         if(!confirm('آیا از ارسال درخواست تبادل اطمینان دارید؟\\n\\n' + summary)) return;
-        
         var data = {{ target_pharmacy_id: selectedTargetPharmacy, my_items: myItems, target_items: targetItems }};
         fetch('/api/register_exchange', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(data) }})
             .then(r=>r.json()).then(res => {{
@@ -2376,32 +2256,22 @@ def exchange():
         renderMyExchangesList(filtered);
     }}
     
-    // ===== تابع اصلی نمایش تبادلات (اصلاح شده) =====
     function renderMyExchangesList(exchanges) {{
-        console.log('🔄 رندرینگ تبادلات:', exchanges);
         const container = document.getElementById('myExchangesList');
-        
-        if (!container) {{
-            console.error('❌ عنصر myExchangesList پیدا نشد');
-            return;
-        }}
-        
+        if (!container) return;
         if (!exchanges || exchanges.length === 0) {{
             container.innerHTML = '<p style="text-align:center;padding:30px;color:#999;">هیچ تبادلی ثبت نشده است</p>';
             return;
         }}
-        
         let html = '<div style="max-height:500px;overflow-y:auto;">';
         exchanges.forEach(ex => {{
             const statusText = ex.status === 'confirmed' ? '✅ تایید شده' : '⏳ در انتظار';
             const statusColor = ex.status === 'confirmed' ? '#28a745' : '#ffc107';
-            const date = new Date(ex.exchange_date);
-            
+            const date = new Date(ex.exchange_date + 'Z');
             let pharmacyName = ex.buyer_name || 'نامشخص';
             if (ex.source_pharmacy_id && ex.source_pharmacy_id != 1) {{
                 pharmacyName = ex.source_pharmacy_name || pharmacyName;
             }}
-            
             html += '<div style="border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:8px 0;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.05);">';
             html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
             html += '<div><strong style="font-size:14px;">💊 ' + ex.drug_name + '</strong>';
@@ -2425,27 +2295,22 @@ def exchange():
         }});
         html += '</div>';
         container.innerHTML = html;
-        console.log('✅ تبادلات نمایش داده شد:', exchanges.length);
     }}
     
     function loadExchanges() {{
-        console.log('🔄 بارگذاری تبادلات...');
         fetch('/api/get_exchanges')
             .then(r => r.json())
             .then(data => {{
-                console.log('📋 دریافت تبادلات:', data);
                 allMyExchanges = data.exchanges || [];
                 renderMyExchangesList(allMyExchanges);
             }})
             .catch(err => {{
-                console.error('❌ خطا در دریافت تبادلات:', err);
                 showToast('❌ خطا در دریافت تبادلات', 'error');
             }});
     }}
     
     function cancelExchange(exchangeId) {{
         if (!confirm('آیا از لغو این درخواست تبادل اطمینان دارید؟')) return;
-        
         fetch('/api/reject_exchange/' + exchangeId, {{ method: 'POST' }})
             .then(r => r.json())
             .then(data => {{
@@ -2468,25 +2333,22 @@ def exchange():
                 if(exchanges.length===0){{ document.getElementById('pendingExchangesList').innerHTML = '<p style="text-align:center;padding:30px;color:#999">هیچ تبادل دریافتی در انتظار تایید نیست</p>'; return; }}
                 var html = '';
                 exchanges.forEach(ex => {{
-                    var d = new Date(ex.exchange_date);
+                    var d = new Date(ex.exchange_date + 'Z');
                     var myItems = ex.my_items_json ? JSON.parse(ex.my_items_json) : [];
                     var targetItems = ex.target_items_json ? JSON.parse(ex.target_items_json) : [];
                     var sourceName = ex.source_pharmacy_name || 'داروخانه';
                     html += '<div class="exchange-card"><div class="exchange-card-header"><h4>🏥 ' + sourceName + ' به شما پیشنهاد تبادل داده است</h4><div class="date">' + d.toLocaleDateString('fa-IR') + ' ' + d.toLocaleTimeString('fa-IR') + '</div></div>';
                     html += '<div class="exchange-card-body">';
-                    
                     if(targetItems.length > 0) {{
                         html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#dc3545;">📦 داروهایی که از شما درخواست کرده:</div><ul class="exchange-drug-list">';
                         html += targetItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
                         html += '</ul></div>';
                     }}
-                    
                     if(myItems.length > 0) {{
                         html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#28a745;">📦 داروهایی که به شما می‌دهد:</div><ul class="exchange-drug-list">';
                         html += myItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
                         html += '</ul></div>';
                     }}
-                    
                     html += '</div>';
                     html += '<div class="exchange-card-footer">';
                     html += '<button class="btn-success" onclick="confirmPendingExchange(' + ex.id + ')">✅ تایید تبادل</button>';
@@ -2550,8 +2412,6 @@ def exchange():
     </script>
     '''
     return render_template_string(HTML, content=content, page_title='🔄 تبادل دارو', session=session)
-
-
 # ===== دفتر کسری =====
 @app.route('/deficit')
 @login_required
@@ -2593,32 +2453,32 @@ def deficit():
     let allDrugs = [];
     const USER_ID = ''' + str(session['user_id']) + ''';
     
-    function showToast(message, type) {{
+    function showToast(message, type) {
         var toast = document.getElementById('toast');
         toast.textContent = message;
         toast.className = 'toast-message ' + (type || 'info');
         toast.style.display = 'block';
-        setTimeout(function() {{
+        setTimeout(function() {
             toast.style.display = 'none';
-        }}, 3000);
-    }}
+        }, 3000);
+    }
     
-    function searchDrugs(query) {{
+    function searchDrugs(query) {
         let suggestions = document.getElementById('suggestions');
-        if(query.length < 1) {{ suggestions.style.display = 'none'; return; }}
+        if(query.length < 1) { suggestions.style.display = 'none'; return; }
         fetch('/api/search_with_stock?q=' + encodeURIComponent(query))
             .then(r => r.json())
-            .then(data => {{
+            .then(data => {
                 let html = '';
-                if(data.length > 0) {{
-                    data.forEach(drug => {{
+                if(data.length > 0) {
+                    data.forEach(drug => {
                         let totalStock = drug.warehouse_qty + drug.pharmacy_qty;
                         let stockStatus = '';
-                        if(totalStock > 0) {{
+                        if(totalStock > 0) {
                             stockStatus = '🟢 <span style="color:#28a745;">موجود (' + totalStock + ' عدد)</span>';
-                        }} else {{
+                        } else {
                             stockStatus = '🔴 <span style="color:#dc3545;">ناموجود</span>';
-                        }}
+                        }
                         html += '<div onclick="selectDrug(\\'' + drug.name + '\\')" style="padding:10px;border-bottom:1px solid #eee;cursor:pointer;">';
                         html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">';
                         html += '<strong style="font-size:14px;">' + drug.name + '</strong>';
@@ -2626,85 +2486,67 @@ def deficit():
                         html += '</div>';
                         html += '<div class="stock-info" style="font-size:11px;color:#666;margin-top:4px;">';
                         html += '🏭 انبار: ' + drug.warehouse_qty + ' عدد | 🏪 داروخانه: ' + drug.pharmacy_qty + ' عدد';
-                        if(drug.nearest_expiry && drug.nearest_expiry !== '-') {{
+                        if(drug.nearest_expiry && drug.nearest_expiry !== '-') {
                             html += ' | 📅 نزدیک‌ترین انقضا: ' + drug.nearest_expiry;
-                        }}
+                        }
                         html += '</div>';
                         html += '</div>';
-                    }});
+                    });
                     suggestions.innerHTML = html;
                     suggestions.style.display = 'block';
-                }} else {{
+                } else {
                     suggestions.innerHTML = '<div style="padding:10px;color:#999;">هیچ دارویی یافت نشد</div>';
                     suggestions.style.display = 'block';
-                }}
-            }})
-            .catch(() => {{ suggestions.style.display = 'none'; }});
-    }}
+                }
+            })
+            .catch(() => { suggestions.style.display = 'none'; });
+    }
     
-    function selectDrug(name) {{
+    function selectDrug(name) {
         document.getElementById('drugName').value = name;
         document.getElementById('suggestions').style.display = 'none';
-    }}
+    }
     
-    function addDrug() {{
+    function addDrug() {
         var name = document.getElementById('drugName').value.trim();
         var qty = document.getElementById('qty').value;
         var type = document.getElementById('type').value;
         var priority = document.getElementById('priority').value;
-        
-        if(!name) {{
-            showToast('❌ لطفاً نام دارو را وارد کنید', 'error');
-            return;
-        }}
-        if(!qty || parseInt(qty) <= 0) {{
-            showToast('❌ تعداد معتبر وارد کنید', 'error');
-            return;
-        }}
-        
-        fetch('/api/add_drug', {{
+        if(!name) { showToast('❌ لطفاً نام دارو را وارد کنید', 'error'); return; }
+        if(!qty || parseInt(qty) <= 0) { showToast('❌ تعداد معتبر وارد کنید', 'error'); return; }
+        fetch('/api/add_drug', {
             method: 'POST',
-            headers: {{
-                'Content-Type': 'application/json'
-            }},
-            body: JSON.stringify({{
-                name: name,
-                quantity: parseInt(qty),
-                type: type,
-                priority: parseInt(priority)
-            }})
-        }})
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, quantity: parseInt(qty), type: type, priority: parseInt(priority) })
+        })
         .then(r => r.json())
-        .then(data => {{
-            if(data.success) {{
+        .then(data => {
+            if(data.success) {
                 showToast('✅ دارو به کسری اضافه شد', 'success');
                 document.getElementById('drugName').value = '';
                 document.getElementById('qty').value = '';
                 loadDrugs();
-            }} else {{
+            } else {
                 showToast('❌ خطا: ' + data.error, 'error');
-            }}
-        }})
-        .catch(err => {{
-            console.error('Error:', err);
-            showToast('❌ خطا در ارتباط با سرور', 'error');
-        }});
-    }}
+            }
+        })
+        .catch(err => { showToast('❌ خطا در ارتباط با سرور', 'error'); });
+    }
     
-    function loadDrugs() {{
-        fetch('/api/get_drugs').then(r=>r.json()).then(d=>{{
+    function loadDrugs() {
+        fetch('/api/get_drugs').then(r=>r.json()).then(d=>{
             allDrugs = d.drugs || [];
             renderDrugsList();
-        }}).catch(() => showToast('❌ خطا در دریافت لیست', 'error'));
-    }}
+        }).catch(() => showToast('❌ خطا در دریافت لیست', 'error'));
+    }
     
-    function renderDrugsList() {{
-        if(allDrugs.length==0){{
+    function renderDrugsList() {
+        if(allDrugs.length==0){
             document.getElementById('list').innerHTML = '<p style="text-align:center;padding:30px;color:#999">لیست کسری خالی است</p>';
             return;
-        }}
+        }
         let html = '<table class="deficit-table"><thead><tr><th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th><th>نام دارو</th><th>تعداد</th><th>نوع</th><th>اولویت</th><th>عملیات</th></tr></thead><tbody>';
-        allDrugs.forEach(d=>{{
+        allDrugs.forEach(d=>{
             let typeText = d.type=='quota' ? '<span style="color:#28a745">سهمیه ای</span>' : '<span style="color:#17a2b8">عادی</span>';
             html += '<tr data-id="'+d.id+'">';
             html += '<td><input type="checkbox" class="drug-checkbox" data-id="'+d.id+'"></td>';
@@ -2714,62 +2556,55 @@ def deficit():
             html += '<td>' + d.priority + '</td>';
             html += '<td><button class="btn-danger btn-sm" onclick="del(' + d.id + ')">🗑️ حذف</button></td>';
             html += '</tr>';
-        }});
+        });
         html += '</tbody></table>';
         document.getElementById('list').innerHTML = html;
-    }}
+    }
     
-    function toggleSelectAll(checkbox) {{
+    function toggleSelectAll(checkbox) {
         document.querySelectorAll('.drug-checkbox').forEach(cb => cb.checked = checkbox.checked);
-    }}
+    }
     
-    function selectAllDeficit() {{
+    function selectAllDeficit() {
         document.querySelectorAll('.drug-checkbox').forEach(cb => cb.checked = true);
-    }}
+    }
     
-    function deselectAllDeficit() {{
+    function deselectAllDeficit() {
         document.querySelectorAll('.drug-checkbox').forEach(cb => cb.checked = false);
-    }}
+    }
     
-    function getSelectedDrugIds() {{
+    function getSelectedDrugIds() {
         let ids = [];
-        document.querySelectorAll('.drug-checkbox:checked').forEach(cb => {{
+        document.querySelectorAll('.drug-checkbox:checked').forEach(cb => {
             ids.push(parseInt(cb.dataset.id));
-        }});
+        });
         return ids;
-    }}
+    }
     
-    function deleteSelectedDrugs() {{
+    function deleteSelectedDrugs() {
         let ids = getSelectedDrugIds();
-        if(ids.length === 0) {{
-            showToast('حداقل یک دارو را انتخاب کنید', 'error');
-            return;
-        }}
-        if(confirm(ids.length + ' دارو حذف شود؟')) {{
-            fetch('/api/delete_drugs', {{
+        if(ids.length === 0) { showToast('حداقل یک دارو را انتخاب کنید', 'error'); return; }
+        if(confirm(ids.length + ' دارو حذف شود؟')) {
+            fetch('/api/delete_drugs', {
                 method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{drug_ids: ids}})
-            }}).then(r=>r.json()).then(data=>{{
-                if(data.success) {{
-                    showToast('✅ داروها حذف شدند', 'success');
-                    loadDrugs();
-                }} else {{
-                    showToast('خطا: ' + data.error, 'error');
-                }}
-            }}).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
-        }}
-    }}
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({drug_ids: ids})
+            }).then(r=>r.json()).then(data=>{
+                if(data.success) { showToast('✅ داروها حذف شدند', 'success'); loadDrugs(); }
+                else { showToast('خطا: ' + data.error, 'error'); }
+            }).catch(() => showToast('❌ خطا در ارتباط با سرور', 'error'));
+        }
+    }
     
-    function del(id) {{
-        if(confirm('حذف شود؟')) fetch('/api/delete_drug/'+id, {{method:'POST'}}).then(()=>loadDrugs()).catch(()=>showToast('❌ خطا', 'error'));
-    }}
+    function del(id) {
+        if(confirm('حذف شود؟')) fetch('/api/delete_drug/'+id, {method:'POST'}).then(()=>loadDrugs()).catch(()=>showToast('❌ خطا', 'error'));
+    }
     
-    document.addEventListener('click', function(e) {{
-        if(!e.target.closest('.search-container')) {{
+    document.addEventListener('click', function(e) {
+        if(!e.target.closest('.search-container')) {
             document.getElementById('suggestions').style.display = 'none';
-        }}
-    }});
+        }
+    });
     
     loadDrugs();
     </script>
@@ -2777,7 +2612,7 @@ def deficit():
     return render_template_string(HTML, content=content, page_title='📋 دفتر کسری', session=session)
 
 
-# ===== پنل ادمین و API =====
+# ===== پنل ادمین =====
 @app.route('/admin')
 @admin_required
 def admin_panel():
@@ -2785,22 +2620,17 @@ def admin_panel():
     
     cursor = db.execute("SELECT COUNT(*) as count FROM users")
     total_users = cursor.fetchone()['count']
-    
     cursor = db.execute("SELECT COUNT(*) as count FROM users WHERE is_approved = 0")
     pending_users = cursor.fetchone()['count']
-    
     cursor = db.execute("SELECT COUNT(*) as count FROM drugs")
     total_drugs = cursor.fetchone()['count']
-    
     cursor = db.execute("SELECT SUM(quantity) as total FROM inventory")
     total_inventory = cursor.fetchone()['total'] or 0
     
     cursor = db.execute("SELECT * FROM users ORDER BY created_at DESC")
     users = cursor.fetchall()
-    
     cursor = db.execute("SELECT * FROM interviews ORDER BY created_at DESC")
     interviews = cursor.fetchall()
-    
     cursor = db.execute("SELECT * FROM announcements ORDER BY created_at DESC")
     announcements = cursor.fetchall()
     
@@ -2812,9 +2642,8 @@ def admin_panel():
         else:
             try:
                 is_approved = u['is_approved']
-            except (KeyError, IndexError):
+            except:
                 is_approved = 1
-            
             if is_approved == 0:
                 status_badge = '<span class="badge badge-warning">⏳ در انتظار تأیید</span>'
             elif is_approved == 2:
@@ -2828,9 +2657,8 @@ def admin_panel():
         if u['username'] != 'admin':
             try:
                 is_approved = u['is_approved']
-            except (KeyError, IndexError):
+            except:
                 is_approved = 1
-            
             if is_approved == 0:
                 actions += f'<button onclick="approveUser({u["id"]})" class="btn-success btn-sm">✅ تأیید</button> '
                 actions += f'<button onclick="rejectUser({u["id"]})" class="btn-danger btn-sm">❌ رد</button> '
@@ -2842,7 +2670,6 @@ def admin_panel():
             phone = u['phone_number'] or '-'
         except:
             phone = '-'
-        
         try:
             addr = u['address'] or '-'
         except:
@@ -2911,9 +2738,7 @@ def admin_panel():
         <div class="table-responsive">
             <table>
                 <thead><tr><th>#</th><th>نام کاربری</th><th>نام داروخانه</th><th>شماره همراه</th><th>آدرس</th><th>وضعیت</th><th>تاریخ ثبت</th><th>عملیات</th></tr></thead>
-                <tbody>
-                    {users_html}
-                </tbody>
+                <tbody>{users_html}</tbody>
             </table>
         </div>
     </div>
@@ -2938,9 +2763,7 @@ def admin_panel():
         <div class="table-responsive">
             <table>
                 <thead><tr><th>#</th><th>عنوان</th><th>داروساز</th><th>داروخانه</th><th>وضعیت</th><th>تاریخ</th><th>عملیات</th></tr></thead>
-                <tbody>
-                    {interviews_html}
-                </tbody>
+                <tbody>{interviews_html}</tbody>
             </table>
         </div>
     </div>
@@ -2957,9 +2780,7 @@ def admin_panel():
         <div class="table-responsive">
             <table>
                 <thead><tr><th>#</th><th>عنوان</th><th>متن</th><th>وضعیت</th><th>تاریخ</th><th>عملیات</th></tr></thead>
-                <tbody>
-                    {announcements_html}
-                </tbody>
+                <tbody>{announcements_html}</tbody>
             </table>
         </div>
     </div>
@@ -3035,11 +2856,8 @@ def admin_panel():
     }}
     </script>
     '''
-    
     return render_template_string(HTML, content=content, page_title='👑 پنل ادمین', session=session)
-
-
-# ===== روت‌های API =====
+# ===== روت‌های ادمین API =====
 
 @app.route('/admin/approve_user/<int:user_id>', methods=['POST'])
 @admin_required
@@ -3067,7 +2885,6 @@ def admin_delete_user(user_id):
         return jsonify({'success': False, 'error': 'کاربر یافت نشد'})
     if user['username'] == 'admin':
         return jsonify({'success': False, 'error': 'نمی‌توان ادمین را حذف کرد'})
-    
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db.execute("DELETE FROM drugs WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM inventory WHERE user_id = ?", (user_id,))
@@ -3088,10 +2905,8 @@ def add_interview():
     content = request.form.get('content')
     image_url = request.form.get('image_url', '')
     audio_url = request.form.get('audio_url', '')
-    
     if not pharmacist_name or not pharmacy_name or not title or not content:
         return '❌ همه فیلدها اجباری هستند', 400
-    
     db = get_db()
     db.execute('''INSERT INTO interviews (pharmacist_name, pharmacy_name, title, content, image_url, audio_url, created_at, is_published)
                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
@@ -3127,7 +2942,6 @@ def add_announcement():
     content = request.form.get('content')
     if not title or not content:
         return '❌ همه فیلدها اجباری هستند', 400
-    
     db = get_db()
     db.execute('''INSERT INTO announcements (title, content, created_at, is_active)
                   VALUES (?, ?, ?, 1)''',
@@ -3155,8 +2969,6 @@ def delete_announcement(announcement_id):
     db.execute("DELETE FROM announcements WHERE id = ?", (announcement_id,))
     db.commit()
     return jsonify({'success': True})
-
-
 # ===== API اصلی =====
 
 @app.route('/api/get_current_user')
@@ -3165,12 +2977,10 @@ def api_get_current_user():
     user = get_current_user_from_session()
     if not user:
         return jsonify({'error': 'user not found'}), 404
-    
     try:
         is_approved = user['is_approved']
-    except (KeyError, IndexError):
+    except:
         is_approved = 1
-    
     return jsonify({
         'id': user['id'],
         'username': user['username'],
@@ -3217,7 +3027,6 @@ def api_get_pharmacy_drugs():
     pharmacy_id = request.args.get('pharmacy_id', type=int)
     if not pharmacy_id:
         return jsonify({'drugs': []})
-    
     db = get_db()
     cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", (pharmacy_id,))
     return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
@@ -3228,12 +3037,10 @@ def api_get_all_pharmacies():
     db = get_db()
     cursor = db.execute("SELECT id, pharmacy_display_name FROM users WHERE id != ? AND is_approved = 1", (session['user_id'],))
     pharmacies = cursor.fetchall()
-    
     try:
         is_pending = session.get('is_approved', 1) == 0
     except:
         is_pending = False
-    
     result = []
     for p in pharmacies:
         name = p['pharmacy_display_name']
@@ -3301,18 +3108,15 @@ def register_sale():
     customer_name = data.get('customer_name', '')
     price = data.get('price', 0)
     location = data.get('location', 'pharmacy')
-    
     if not drug_name or not quantity or not expiry_date:
         return jsonify({'success': False, 'error': 'نام دارو، تعداد و تاریخ انقضا اجباری است'})
     if not validate_expiry_date(expiry_date):
-        return jsonify({'success': False, 'error': 'فرمت تاریخ انقضا نامعتبر است. فرمت صحیح: سال.ماه (مثال: 2025.12)'})
-    
+        return jsonify({'success': False, 'error': 'فرمت تاریخ انقضا نامعتبر است'})
     cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, drug_name, location, expiry_date))
     items = cursor.fetchall()
     total_available = sum(i['quantity'] for i in items)
     if total_available < quantity:
         return jsonify({'success': False, 'error': f'موجودی دارو کافی نیست. فقط {total_available} عدد موجود است'})
-    
     remaining = quantity
     for item in items:
         if remaining <= 0:
@@ -3323,7 +3127,6 @@ def register_sale():
             if item['quantity'] - take == 0:
                 db.execute("DELETE FROM inventory WHERE id = ?", (item['id'],))
             remaining -= take
-    
     db.execute('''INSERT INTO sales (user_id, drug_name, quantity, sale_date, expiry_date, customer_name, price, location, created_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                (user_id, drug_name, quantity, sale_date if sale_date else None, expiry_date, customer_name, price, location, datetime.now().isoformat()))
@@ -3335,7 +3138,6 @@ def register_sale():
 def add_drug():
     db = get_db()
     user_id = session['user_id']
-    
     if request.is_json:
         data = request.get_json()
         name = data.get('name')
@@ -3347,13 +3149,10 @@ def add_drug():
         quantity = int(request.form.get('quantity', 0))
         drug_type = request.form.get('type', 'normal')
         priority = int(request.form.get('priority', 4))
-    
     if not name or not name.strip():
         return jsonify({'success': False, 'error': 'نام دارو را وارد کنید'})
-    
     if not quantity or quantity <= 0:
         return jsonify({'success': False, 'error': 'تعداد معتبر وارد کنید'})
-    
     db.execute('INSERT INTO drugs (user_id, name, quantity, type, priority, created_at, ordered) VALUES (?, ?, ?, ?, ?, ?, ?)',
                (user_id, name.strip(), quantity, drug_type, priority, datetime.now().isoformat(), 0))
     db.commit()
@@ -3368,10 +3167,8 @@ def place_order():
     selected_ids = req.get('selected_ids', [])
     company = req.get('company')
     quantities = req.get('quantities', {})
-    
     if not selected_ids:
         return jsonify({'success': False, 'error': 'هیچ دارویی انتخاب نشده است'})
-    
     for drug_id in selected_ids:
         cursor = db.execute("SELECT * FROM drugs WHERE id = ? AND user_id = ?", (drug_id, user_id))
         drug = cursor.fetchone()
@@ -3381,7 +3178,6 @@ def place_order():
                       (user_id, company, drug['name'], qty, datetime.now().isoformat()))
             if drug['type'] != 'quota':
                 db.execute("UPDATE drugs SET ordered = 1 WHERE id = ?", (drug_id,))
-    
     db.execute("DELETE FROM drugs WHERE ordered = 1 AND user_id = ? AND type != 'quota'", (user_id,))
     db.commit()
     return jsonify({'success': True})
@@ -3415,12 +3211,139 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+@app.route('/api/get_inventory_grouped_by_expiry')
+@login_required
+def get_inventory_grouped_by_expiry():
+    db = get_db()
+    user_id = session['user_id']
+    cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
+    hidden_ids = [row['item_id'] for row in cursor.fetchall()]
+    cursor = db.execute("""
+        SELECT id, name, quantity, expiry_date, location, created_at 
+        FROM inventory 
+        WHERE user_id = ? AND quantity > 0
+        ORDER BY 
+            CASE WHEN expiry_date IS NULL OR expiry_date = '' THEN 1 ELSE 0 END,
+            substr(expiry_date, 1, 4) ASC,
+            substr(expiry_date, 6, 2) ASC
+    """, (user_id,))
+    items = [dict(row) for row in cursor.fetchall()]
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    pharmacy_name = user['pharmacy_display_name'] if user else 'داروخانه من'
+    expiry_groups = {}
+    for item in items:
+        expiry = item['expiry_date'] or 'نامشخص'
+        if expiry not in expiry_groups:
+            expiry_groups[expiry] = []
+        expiry_groups[expiry].append(item)
+    result = []
+    for expiry_date, drugs in expiry_groups.items():
+        drugs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        pharmacies = [{
+            'pharmacy_id': user_id,
+            'pharmacy_name': pharmacy_name,
+            'last_update': convert_date_to_jalali(drugs[0]['created_at']) if drugs and drugs[0]['created_at'] else '',
+            'drugs': [{
+                'id': d['id'],
+                'name': d['name'],
+                'quantity': d['quantity'],
+                'expiry_date': d['expiry_date'],
+                'location': d['location'],
+                'location_text': 'انبار' if d['location'] == 'warehouse' else 'داروخانه',
+                'hidden': d['id'] in hidden_ids
+            } for d in drugs]
+        }]
+        result.append({
+            'expiry_date': expiry_date,
+            'status_text': get_expiry_status(expiry_date)['text'],
+            'pharmacies': pharmacies
+        })
+    result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
+    return jsonify({'data': result})
 
+@app.route('/api/get_all_pharmacies_drugs_grouped_by_expiry')
+@login_required
+def get_all_pharmacies_drugs_grouped_by_expiry():
+    user_id = session['user_id']
+    db = get_db()
+    result = []
+    cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
+    hidden_ids = [row['item_id'] for row in cursor.fetchall()]
+    cursor = db.execute("""
+        SELECT id, pharmacy_display_name 
+        FROM users 
+        WHERE id != ? AND is_approved = 1
+    """, (user_id,))
+    other_pharmacies = [dict(row) for row in cursor.fetchall()]
+    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
+    my_user = cursor.fetchone()
+    my_pharmacy_name = my_user['pharmacy_display_name'] if my_user else 'داروخانه من'
+    all_pharmacies = [{'id': user_id, 'pharmacy_display_name': my_pharmacy_name}] + other_pharmacies
+    expiry_groups = {}
+    for ph in all_pharmacies:
+        cursor = db.execute("""
+            SELECT id, name, quantity, expiry_date, location, created_at 
+            FROM inventory 
+            WHERE user_id = ? AND quantity > 0
+        """, (ph['id'],))
+        drugs = [dict(row) for row in cursor.fetchall()]
+        if not drugs:
+            continue
+        for drug in drugs:
+            if ph['id'] == user_id and drug['id'] in hidden_ids:
+                continue
+            expiry = drug['expiry_date'] or 'نامشخص'
+            if expiry not in expiry_groups:
+                expiry_groups[expiry] = {}
+            if ph['id'] not in expiry_groups[expiry]:
+                expiry_groups[expiry][ph['id']] = {
+                    'pharmacy_id': ph['id'],
+                    'pharmacy_name': ph['pharmacy_display_name'],
+                    'drugs': [],
+                    'last_update': ''
+                }
+            expiry_groups[expiry][ph['id']]['drugs'].append({
+                'id': drug['id'],
+                'name': drug['name'],
+                'quantity': drug['quantity'],
+                'expiry_date': drug['expiry_date'],
+                'location': drug['location'],
+                'hidden': drug['id'] in hidden_ids
+            })
+            if drug.get('created_at') and drug['created_at'] > expiry_groups[expiry][ph['id']]['last_update']:
+                expiry_groups[expiry][ph['id']]['last_update'] = convert_date_to_jalali(drug['created_at'])
+    for expiry_date, pharmacies_dict in expiry_groups.items():
+        pharmacies = list(pharmacies_dict.values())
+        pharmacies.sort(key=lambda x: x['last_update'], reverse=True)
+        result.append({
+            'expiry_date': expiry_date,
+            'status_text': get_expiry_status(expiry_date)['text'],
+            'pharmacies': pharmacies
+        })
+    result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
+    return jsonify({'data': result})
+@app.route('/api/get_my_drugs_for_exchange')
+@login_required
+def get_my_drugs_for_exchange():
+    user_id = session['user_id']
+    db = get_db()
+    cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", (user_id,))
+    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
+
+@app.route('/api/get_pharmacy_drugs_for_exchange')
+@login_required
+def get_pharmacy_drugs_for_exchange():
+    pharmacy_id = request.args.get('pharmacy_id', type=int)
+    if not pharmacy_id:
+        return jsonify({'drugs': []})
+    db = get_db()
+    cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0 ORDER BY name", (pharmacy_id,))
+    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
 @app.route('/api/add_inventory', methods=['POST'])
 @login_required
 def add_inventory():
     logging.info(f"🚀 add_inventory called by user_id={session['user_id']}")
-    
     try:
         db = get_db()
         user_id = session['user_id']
@@ -3430,21 +3353,16 @@ def add_inventory():
         location = request.form.get('location', 'warehouse')
         supplier = request.form.get('supplier', '')
         price_str = request.form.get('purchase_price', '0')
-        
         logging.info(f"📦 Data: name={name}, qty={quantity}, expiry={expiry_date}, loc={location}")
-        
         if not name or quantity <= 0 or not expiry_date:
             logging.error("❌ Missing required fields")
             return jsonify({'success': False, 'error': 'نام، تعداد و تاریخ انقضا اجباری است'})
-        
         if not validate_expiry_date(expiry_date):
             logging.error(f"❌ Invalid expiry date: {expiry_date}")
             return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
-        
         cursor = db.execute("SELECT id, quantity FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", 
                            (user_id, name, expiry_date, location))
         existing = cursor.fetchone()
-        
         if existing:
             logging.info(f"🔄 Updating existing drug id={existing['id']}, old_qty={existing['quantity']}, add={quantity}")
             db.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (quantity, existing['id']))
@@ -3453,11 +3371,9 @@ def add_inventory():
             db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at, supplier, purchase_price)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                        (user_id, name, quantity, expiry_date, location, datetime.now().isoformat(), supplier, float(price_str) if price_str else 0))
-        
         db.commit()
         logging.info(f"✅ Successfully added/updated inventory for {name}")
         return jsonify({'success': True})
-        
     except Exception as e:
         logging.error(f"❌ Exception in add_inventory: {str(e)}")
         import traceback
@@ -3475,19 +3391,15 @@ def move_inventory():
     from_location = req.get('from_location')
     to_location = req.get('to_location')
     expiry_date = req.get('expiry_date')
-    
     if not name or not quantity or not expiry_date:
         return jsonify({'success': False, 'error': 'نام، تعداد و تاریخ انقضا اجباری است'})
-    
     if not validate_expiry_date(expiry_date):
         return jsonify({'success': False, 'error': 'تاریخ انقضا نامعتبر است'})
-    
     cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND location = ? AND expiry_date = ?", (user_id, name, from_location, expiry_date))
     sources = cursor.fetchall()
     total_available = sum(s['quantity'] for s in sources)
     if total_available < quantity:
         return jsonify({'success': False, 'error': f'موجودی ناکافی. فقط {total_available} عدد موجود است'})
-    
     remaining = quantity
     for source in sources:
         if remaining <= 0:
@@ -3497,7 +3409,6 @@ def move_inventory():
             db.execute("UPDATE inventory SET quantity = quantity - ? WHERE id = ?", (take, source['id']))
             if source['quantity'] - take == 0:
                 db.execute("DELETE FROM inventory WHERE id = ?", (source['id'],))
-            
             cursor = db.execute("SELECT id FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = ?", (user_id, name, expiry_date, to_location))
             dest = cursor.fetchone()
             if dest:
@@ -3507,12 +3418,9 @@ def move_inventory():
                               VALUES (?, ?, ?, ?, ?, ?)''',
                            (user_id, name, take, expiry_date, to_location, datetime.now().isoformat()))
             remaining -= take
-    
     db.commit()
     return jsonify({'success': True})
-
-
-# ===== API تبادل (اصلاح شده) =====
+# ===== API تبادل =====
 
 @app.route('/api/register_exchange', methods=['POST'])
 @login_required
@@ -3520,29 +3428,21 @@ def register_exchange():
     db = get_db()
     user_id = session['user_id']
     data = request.get_json()
-    
     target_pharmacy_id = data.get('target_pharmacy_id')
     my_items = data.get('my_items', [])
     target_items = data.get('target_items', [])
-    
     if not target_pharmacy_id:
         return jsonify({'success': False, 'error': 'Target pharmacy not selected'})
-    
     cursor = db.execute("SELECT categories FROM user_categories WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     sender_categories = row['categories'] if row else ''
-    
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
     sender = cursor.fetchone()
     sender_name = sender['pharmacy_display_name'] if sender else 'My Pharmacy'
-    
     cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (target_pharmacy_id,))
     target = cursor.fetchone()
     target_name = target['pharmacy_display_name'] if target else 'Target Pharmacy'
-    
     now_iran = get_iran_time_iso()
-    
-    # ثبت برای داروخانه هدف (درخواست دریافت)
     if target_items:
         for item in target_items:
             db.execute('''INSERT INTO exchanges (
@@ -3554,8 +3454,6 @@ def register_exchange():
                  item.get('expiry_date', ''), 'pharmacy', now_iran, user_id, 
                  sender_categories, json.dumps(my_items), json.dumps(target_items), 
                  user_id, sender_name))
-    
-    # ثبت برای کاربر فعلی (درخواست ارسال)
     if my_items:
         for item in my_items:
             db.execute('''INSERT INTO exchanges (
@@ -3567,7 +3465,6 @@ def register_exchange():
                  item.get('expiry_date', ''), 'pharmacy', now_iran, target_pharmacy_id, 
                  sender_categories, json.dumps(my_items), json.dumps(target_items), 
                  user_id, sender_name))
-    
     db.commit()
     return jsonify({'success': True})
 
@@ -3576,7 +3473,6 @@ def register_exchange():
 def get_exchanges():
     db = get_db()
     user_id = session['user_id']
-    
     cursor = db.execute("""
         SELECT * FROM exchanges 
         WHERE user_id = ? 
@@ -3584,11 +3480,9 @@ def get_exchanges():
         OR source_pharmacy_id = ?
         ORDER BY exchange_date DESC
     """, (user_id, user_id, user_id))
-    
     exchanges = []
     for row in cursor.fetchall():
         ex = dict(row)
-        # ✅ تبدیل به وقت ایران (UTC+3:30)
         if ex.get('exchange_date'):
             try:
                 dt = datetime.fromisoformat(ex['exchange_date'])
@@ -3597,7 +3491,6 @@ def get_exchanges():
             except:
                 pass
         exchanges.append(ex)
-    
     return jsonify({'exchanges': exchanges})
 
 @app.route('/api/get_pending_exchanges')
@@ -3605,7 +3498,6 @@ def get_exchanges():
 def get_pending_exchanges():
     db = get_db()
     user_id = session['user_id']
-    
     cursor = db.execute("""
         SELECT * FROM exchanges 
         WHERE (user_id = ? OR target_pharmacy_id = ?)
@@ -3614,8 +3506,17 @@ def get_pending_exchanges():
         AND source_pharmacy_id != ?
         ORDER BY exchange_date DESC
     """, (user_id, user_id, user_id))
-    
-    exchanges = [dict(row) for row in cursor.fetchall()]
+    exchanges = []
+    for row in cursor.fetchall():
+        ex = dict(row)
+        if ex.get('exchange_date'):
+            try:
+                dt = datetime.fromisoformat(ex['exchange_date'])
+                iran_time = dt + timedelta(hours=3, minutes=30)
+                ex['exchange_date'] = iran_time.isoformat()
+            except:
+                pass
+        exchanges.append(ex)
     return jsonify({'exchanges': exchanges})
 
 @app.route('/api/confirm_exchange/<int:exchange_id>', methods=['POST'])
@@ -3623,30 +3524,23 @@ def get_pending_exchanges():
 def confirm_exchange(exchange_id):
     db = get_db()
     user_id = session['user_id']
-    
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
         return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا پردازش شده است'})
-    
     exchange_dict = dict(exchange)
-    
     if exchange_dict.get('source_pharmacy_id') and exchange_dict['source_pharmacy_id'] != user_id:
         target_items = json.loads(exchange_dict['target_items_json']) if exchange_dict['target_items_json'] else []
         my_items = json.loads(exchange_dict['my_items_json']) if exchange_dict['my_items_json'] else []
-        
         for item in target_items:
             drug_name = item.get('name')
             expiry_date = item.get('expiry_date', '')
             quantity = item.get('quantity')
-            
             cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND quantity > 0", (user_id, drug_name, expiry_date))
             inv_items = cursor.fetchall()
-            
             total_available = sum(i['quantity'] for i in inv_items)
             if total_available < quantity:
                 return jsonify({'success': False, 'error': f'موجودی {drug_name} با تاریخ {expiry_date} کافی نیست'})
-            
             remaining = quantity
             for inv_item in inv_items:
                 if remaining <= 0:
@@ -3658,12 +3552,10 @@ def confirm_exchange(exchange_id):
                 else:
                     db.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, inv_item['id']))
                 remaining -= take
-        
         for item in my_items:
             drug_name = item.get('name')
             expiry_date = item.get('expiry_date', '')
             quantity = item.get('quantity')
-            
             cursor = db.execute("SELECT * FROM inventory WHERE user_id = ? AND name = ? AND expiry_date = ? AND location = 'pharmacy'", (user_id, drug_name, expiry_date))
             inv_item = cursor.fetchone()
             if inv_item:
@@ -3672,13 +3564,10 @@ def confirm_exchange(exchange_id):
                 db.execute('''INSERT INTO inventory (user_id, name, quantity, expiry_date, location, created_at)
                               VALUES (?, ?, ?, ?, ?, ?)''',
                            (user_id, drug_name, quantity, expiry_date, 'pharmacy', get_iran_time_iso()))
-    
     db.execute("UPDATE exchanges SET status = 'confirmed' WHERE id = ?", (exchange_id,))
-    
     if exchange_dict.get('source_pharmacy_id'):
         db.execute("UPDATE exchanges SET status = 'confirmed' WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                    (exchange_dict['source_pharmacy_id'], user_id))
-    
     db.commit()
     return jsonify({'success': True})
 
@@ -3687,23 +3576,17 @@ def confirm_exchange(exchange_id):
 def reject_exchange(exchange_id):
     db = get_db()
     user_id = session['user_id']
-    
     cursor = db.execute("SELECT * FROM exchanges WHERE id = ? AND user_id = ? AND status = 'pending'", (exchange_id, user_id))
     exchange = cursor.fetchone()
     if not exchange:
         return jsonify({'success': False, 'error': 'تبادل یافت نشد یا قبلا پردازش شده است'})
-    
     exchange_dict = dict(exchange)
-    
     db.execute("DELETE FROM exchanges WHERE id = ?", (exchange_id,))
-    
     if exchange_dict.get('source_pharmacy_id'):
         db.execute("DELETE FROM exchanges WHERE source_pharmacy_id = ? AND target_pharmacy_id = ? AND status = 'pending'",
                    (exchange_dict['source_pharmacy_id'], user_id))
-    
     db.commit()
     return jsonify({'success': True})
-
 @app.route('/api/get_user_categories')
 @login_required
 def get_user_categories():
@@ -3742,10 +3625,8 @@ def toggle_hidden_items():
     data = request.get_json()
     item_ids = data.get('item_ids', [])
     hidden = data.get('hidden', False)
-    
     if not item_ids:
         return jsonify({'success': False, 'error': 'هیچ آیتمی انتخاب نشده است'})
-    
     if hidden:
         for item_id in item_ids:
             db.execute("INSERT OR IGNORE INTO hidden_items (user_id, item_id) VALUES (?, ?)", (user_id, item_id))
@@ -3754,157 +3635,6 @@ def toggle_hidden_items():
         db.execute(f"DELETE FROM hidden_items WHERE user_id = ? AND item_id IN ({placeholders})", (user_id, *item_ids))
     db.commit()
     return jsonify({'success': True})
-
-@app.route('/api/get_inventory_grouped_by_expiry')
-@login_required
-def get_inventory_grouped_by_expiry():
-    db = get_db()
-    user_id = session['user_id']
-    
-    cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
-    hidden_ids = [row['item_id'] for row in cursor.fetchall()]
-    
-    cursor = db.execute("""
-        SELECT id, name, quantity, expiry_date, location, created_at 
-        FROM inventory 
-        WHERE user_id = ? AND quantity > 0
-        ORDER BY 
-            CASE WHEN expiry_date IS NULL OR expiry_date = '' THEN 1 ELSE 0 END,
-            substr(expiry_date, 1, 4) ASC,
-            substr(expiry_date, 6, 2) ASC
-    """, (user_id,))
-    items = [dict(row) for row in cursor.fetchall()]
-    
-    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
-    user = cursor.fetchone()
-    pharmacy_name = user['pharmacy_display_name'] if user else 'داروخانه من'
-    
-    expiry_groups = {}
-    for item in items:
-        expiry = item['expiry_date'] or 'نامشخص'
-        if expiry not in expiry_groups:
-            expiry_groups[expiry] = []
-        expiry_groups[expiry].append(item)
-    
-    result = []
-    for expiry_date, drugs in expiry_groups.items():
-        drugs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-        pharmacies = [{
-            'pharmacy_id': user_id,
-            'pharmacy_name': pharmacy_name,
-            'last_update': convert_date_to_jalali(drugs[0]['created_at']) if drugs and drugs[0]['created_at'] else '',
-            'drugs': [{
-                'id': d['id'],
-                'name': d['name'],
-                'quantity': d['quantity'],
-                'expiry_date': d['expiry_date'],
-                'location': d['location'],
-                'location_text': 'انبار' if d['location'] == 'warehouse' else 'داروخانه',
-                'hidden': d['id'] in hidden_ids
-            } for d in drugs]
-        }]
-        result.append({
-            'expiry_date': expiry_date,
-            'status_text': get_expiry_status(expiry_date)['text'],
-            'pharmacies': pharmacies
-        })
-    
-    result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
-    return jsonify({'data': result})
-
-@app.route('/api/get_all_pharmacies_drugs_grouped_by_expiry')
-@login_required
-def get_all_pharmacies_drugs_grouped_by_expiry():
-    user_id = session['user_id']
-    db = get_db()
-    result = []
-    
-    cursor = db.execute("SELECT item_id FROM hidden_items WHERE user_id = ?", (user_id,))
-    hidden_ids = [row['item_id'] for row in cursor.fetchall()]
-    
-    cursor = db.execute("""
-        SELECT id, pharmacy_display_name 
-        FROM users 
-        WHERE id != ? AND is_approved = 1
-    """, (user_id,))
-    other_pharmacies = [dict(row) for row in cursor.fetchall()]
-    
-    cursor = db.execute("SELECT pharmacy_display_name FROM users WHERE id = ?", (user_id,))
-    my_user = cursor.fetchone()
-    my_pharmacy_name = my_user['pharmacy_display_name'] if my_user else 'داروخانه من'
-    
-    all_pharmacies = [{'id': user_id, 'pharmacy_display_name': my_pharmacy_name}] + other_pharmacies
-    
-    expiry_groups = {}
-    for ph in all_pharmacies:
-        cursor = db.execute("""
-            SELECT id, name, quantity, expiry_date, location, created_at 
-            FROM inventory 
-            WHERE user_id = ? AND quantity > 0
-        """, (ph['id'],))
-        drugs = [dict(row) for row in cursor.fetchall()]
-        if not drugs:
-            continue
-        for drug in drugs:
-            if ph['id'] == user_id and drug['id'] in hidden_ids:
-                continue
-            expiry = drug['expiry_date'] or 'نامشخص'
-            if expiry not in expiry_groups:
-                expiry_groups[expiry] = {}
-            if ph['id'] not in expiry_groups[expiry]:
-                expiry_groups[expiry][ph['id']] = {
-                    'pharmacy_id': ph['id'],
-                    'pharmacy_name': ph['pharmacy_display_name'],
-                    'drugs': [],
-                    'last_update': ''
-                }
-            expiry_groups[expiry][ph['id']]['drugs'].append({
-                'id': drug['id'],
-                'name': drug['name'],
-                'quantity': drug['quantity'],
-                'expiry_date': drug['expiry_date'],
-                'location': drug['location'],
-                'hidden': drug['id'] in hidden_ids
-            })
-            if drug.get('created_at') and drug['created_at'] > expiry_groups[expiry][ph['id']]['last_update']:
-                expiry_groups[expiry][ph['id']]['last_update'] = convert_date_to_jalali(drug['created_at'])
-    
-    for expiry_date, pharmacies_dict in expiry_groups.items():
-        pharmacies = list(pharmacies_dict.values())
-        pharmacies.sort(key=lambda x: x['last_update'], reverse=True)
-        result.append({
-            'expiry_date': expiry_date,
-            'status_text': get_expiry_status(expiry_date)['text'],
-            'pharmacies': pharmacies
-        })
-    
-    result.sort(key=lambda x: parse_expiry_number(x['expiry_date']))
-    return jsonify({'data': result})
-
-
-@app.route('/api/get_my_drugs_for_exchange')
-@login_required
-def get_my_drugs_for_exchange():
-    user_id = session['user_id']  # ✅ کاربر جاری
-    db = get_db()
-    # ✅ فقط داروهای کاربر جاری
-    cursor = db.execute(
-        "SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0", 
-        (user_id,)
-    )
-    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
-
-@app.route('/api/get_pharmacy_drugs_for_exchange')
-@login_required
-def get_pharmacy_drugs_for_exchange():
-    pharmacy_id = request.args.get('pharmacy_id', type=int)
-    if not pharmacy_id:
-        return jsonify({'drugs': []})
-    db = get_db()
-    cursor = db.execute("SELECT id, name, quantity, expiry_date, location FROM inventory WHERE user_id = ? AND quantity > 0 ORDER BY name", (pharmacy_id,))
-    return jsonify({'drugs': [dict(row) for row in cursor.fetchall()]})
-
-
 # ===== اجرای برنامه =====
 if __name__ == '__main__':
     print("=" * 50)
