@@ -2235,41 +2235,41 @@ def exchange():
     }}
     
     // ===== تغییر 3: اصلاح confirmExchangeFinal با هدرهای کش =====
-    function confirmExchangeFinal() {
-        var myItems = selectedItems.filter(item => item.source === 'my');
-        var targetItems = selectedItems.filter(item => item.source === 'target');
-        if(myItems.length === 0 && targetItems.length === 0) { showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }
-        if(!selectedTargetPharmacy) { showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }
-        var summary = '';
-        if(myItems.length > 0) { summary += '📦 داروهایی که می‌دهم:\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\n'); }
-        if(targetItems.length > 0) { summary += '\n🏥 داروهایی که می‌گیرم:\n'; targetItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد (از ' + selectedTargetPharmacyName + ')\n'); }
-        if(!confirm('آیا از ارسال درخواست تبادل اطمینان دارید؟\n\n' + summary)) return;
-        var data = { target_pharmacy_id: selectedTargetPharmacy, my_items: myItems, target_items: targetItems };
-        fetch('/api/register_exchange', { 
-            method: 'POST', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            }, 
-            body: JSON.stringify(data) 
-        })
-        .then(r=>r.json())
-        .then(res => {
-            if(res.success) { 
-                showToast('✅ درخواست تبادل با موفقیت ارسال شد', 'success'); 
-                resetExchangeSelection(); 
-                loadDrugsForExchange(); 
-                loadExchanges(); 
-                loadPendingExchanges();
-                loadExchangeAllDrugs();
-            } else { 
-                showToast('❌ خطا: ' + res.error, 'error'); 
-            }
-        })
-        .catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
-    }
+function confirmExchangeFinal() {
+    var myItems = selectedItems.filter(item => item.source === 'my');
+    var targetItems = selectedItems.filter(item => item.source === 'target');
+    if(myItems.length === 0 && targetItems.length === 0) { showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }
+    if(!selectedTargetPharmacy) { showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }
+    var summary = '';
+    if(myItems.length > 0) { summary += '📦 داروهایی که می‌دهم:\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\n'); }
+    if(targetItems.length > 0) { summary += '\n🏥 داروهایی که می‌گیرم:\n'; targetItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد (از ' + selectedTargetPharmacyName + ')\n'); }
+    if(!confirm('آیا از ارسال درخواست تبادل اطمینان دارید؟\n\n' + summary)) return;
+    var data = { target_pharmacy_id: selectedTargetPharmacy, my_items: myItems, target_items: targetItems };
+    fetch('/api/register_exchange', { 
+        method: 'POST', 
+        headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }, 
+        body: JSON.stringify(data) 
+    })
+    .then(r=>r.json())
+    .then(res => {
+        if(res.success) { 
+            showToast('✅ درخواست تبادل با موفقیت ارسال شد', 'success'); 
+            resetExchangeSelection(); 
+            loadDrugsForExchange(); 
+            loadExchanges(); 
+            loadPendingExchanges();
+            loadExchangeAllDrugs();
+        } else { 
+            showToast('❌ خطا: ' + res.error, 'error'); 
+        }
+    })
+    .catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
+}
     
     // ===== تغییر 2: اصلاح loadExchanges با هدرهای کش =====
     function loadExchanges() {
