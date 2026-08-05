@@ -2235,105 +2235,106 @@ def exchange():
     }}
     
     // ===== تغییر 3: اصلاح confirmExchangeFinal با هدرهای کش =====
-function confirmExchangeFinal() {
-    var myItems = selectedItems.filter(item => item.source === 'my');
-    var targetItems = selectedItems.filter(item => item.source === 'target');
-    if(myItems.length === 0 && targetItems.length === 0) { showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }
-    if(!selectedTargetPharmacy) { showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }
-    var summary = '';
-    if(myItems.length > 0) { summary += '📦 داروهایی که می‌دهم:\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\n'); }
-    if(targetItems.length > 0) { summary += '\n🏥 داروهایی که می‌گیرم:\n'; targetItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد (از ' + selectedTargetPharmacyName + ')\n'); }
-    if(!confirm('آیا از ارسال درخواست تبادل اطمینان دارید؟\n\n' + summary)) return;
-    var data = { target_pharmacy_id: selectedTargetPharmacy, my_items: myItems, target_items: targetItems };
-    fetch('/api/register_exchange', { 
-        method: 'POST', 
-        headers: { 
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-        }, 
-        body: JSON.stringify(data) 
-    })
-    .then(r=>r.json())
-    .then(res => {
-        if(res.success) { 
-            showToast('✅ درخواست تبادل با موفقیت ارسال شد', 'success'); 
-            resetExchangeSelection(); 
-            loadDrugsForExchange(); 
-            loadExchanges(); 
-            loadPendingExchanges();
-            loadExchangeAllDrugs();
-        } else { 
-            showToast('❌ خطا: ' + res.error, 'error'); 
-        }
-    })
-    .catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
-}
-    
-    // ===== تغییر 2: اصلاح loadExchanges با هدرهای کش =====
-    function loadExchanges() {
-        fetch('/api/get_exchanges', {
-            headers: {
+    function confirmExchangeFinal() {{
+        var myItems = selectedItems.filter(item => item.source === 'my');
+        var targetItems = selectedItems.filter(item => item.source === 'target');
+        if(myItems.length === 0 && targetItems.length === 0) {{ showToast('هیچ دارویی برای تبادل انتخاب نشده است', 'error'); return; }}
+        if(!selectedTargetPharmacy) {{ showToast('لطفا داروخانه هدف را انتخاب کنید', 'error'); return; }}
+        var summary = '';
+        if(myItems.length > 0) {{ summary += '📦 داروهایی که می‌دهم:\n'; myItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد\n'); }}
+        if(targetItems.length > 0) {{ summary += '\n🏥 داروهایی که می‌گیرم:\n'; targetItems.forEach(i => summary += '- ' + i.name + ': ' + i.quantity + ' عدد (از ' +        selectedTargetPharmacyName + ')\n'); }}
+        if(!confirm('آیا از ارسال درخواست تبادل اطمینان دارید؟\n\n' + summary)) return;
+        var data = {{ target_pharmacy_id: selectedTargetPharmacy, my_items: myItems, target_items: targetItems }};
+        fetch('/api/register_exchange', {{ 
+            method: 'POST', 
+            headers: {{ 
+                'Content-Type': 'application/json',
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Pragma': 'no-cache',
                 'Expires': '0'
-            }
-        })
+        }}, 
+            body: JSON.stringify(data) 
+        }})
+        .then(r=>r.json())
+        .then(res => {{
+            if(res.success) {{ 
+                showToast('✅ درخواست تبادل با موفقیت ارسال شد', 'success'); 
+                resetExchangeSelection(); 
+                loadDrugsForExchange(); 
+                loadExchanges(); 
+                loadPendingExchanges();
+                loadExchangeAllDrugs();
+            }} else {{ 
+                showToast('❌ خطا: ' + res.error, 'error'); 
+            }}
+        }})
+        .catch(()=> showToast('❌ خطا در ارتباط با سرور', 'error'));
+    }}
+
+    
+    // ===== تغییر 2: اصلاح loadExchanges با هدرهای کش =====
+    function loadExchanges() {{
+        fetch('/api/get_exchanges', {{
+            headers: {{
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }}
+        }})
         .then(r => r.json())
         .then(data => {
             allMyExchanges = data.exchanges || [];
             renderMyExchangesList(allMyExchanges);
-        })
-        .catch(err => {
+        }})
+        .catch(err => {{
             showToast('❌ خطا در دریافت تبادلات', 'error');
-        });
-    }
+        }});
+    }}
     
     // ===== تغییر 3: اصلاح loadPendingExchanges با هدرهای کش =====
-    function loadPendingExchanges() {
-        fetch('/api/get_pending_exchanges', {
-            headers: {
+    function loadPendingExchanges() {{
+        fetch('/api/get_pending_exchanges', {{
+            headers: {{
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Pragma': 'no-cache',
                 'Expires': '0'
-            }
-        })
+            }}
+        }})
         .then(r=>r.json())
-        .then(d=>{
+        .then(d=>{{
             var exchanges = d.exchanges || [];
-            if(exchanges.length===0){
+            if(exchanges.length===0){{
                 document.getElementById('pendingExchangesList').innerHTML = '<p style="text-align:center;padding:30px;color:#999">هیچ تبادل دریافتی در انتظار تایید نیست</p>';
                 return;
-            }
+            }}
             var html = '';
-            exchanges.forEach(ex => {
+            exchanges.forEach(ex => {{
                 var d = new Date(ex.exchange_date + 'Z');
                 var myItems = ex.my_items_json ? JSON.parse(ex.my_items_json) : [];
                 var targetItems = ex.target_items_json ? JSON.parse(ex.target_items_json) : [];
                 var sourceName = ex.source_pharmacy_name || 'داروخانه';
                 html += '<div class="exchange-card"><div class="exchange-card-header"><h4>🏥 ' + sourceName + ' به شما پیشنهاد تبادل داده است</h4><div class="date">' + d.toLocaleDateString('fa-IR') + ' ' + d.toLocaleTimeString('fa-IR') + '</div></div>';
                 html += '<div class="exchange-card-body">';
-                if(targetItems.length > 0) {
+                if(targetItems.length > 0) {{
                     html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#dc3545;">📦 داروهایی که از شما درخواست کرده:</div><ul class="exchange-drug-list">';
                     html += targetItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
                     html += '</ul></div>';
-                }
-                if(myItems.length > 0) {
+                }}
+                if(myItems.length > 0) {{
                     html += '<div class="exchange-section"><div class="exchange-section-title" style="color:#28a745;">📦 داروهایی که به شما می‌دهد:</div><ul class="exchange-drug-list">';
                     html += myItems.map(i => '<li><strong>' + i.name + '</strong> <span>' + i.quantity + ' عدد (انقضا: ' + (i.expiry_date || '-') + ')</span></li>').join('');
                     html += '</ul></div>';
-                }
+                }}
                 html += '</div>';
                 html += '<div class="exchange-card-footer">';
                 html += '<button class="btn-success" onclick="confirmPendingExchange(' + ex.id + ')">✅ تایید تبادل</button>';
                 html += '<button class="btn-danger" onclick="rejectPendingExchange(' + ex.id + ')">❌ رد درخواست</button>';
                 html += '</div></div>';
-            });
+            }});
             document.getElementById('pendingExchangesList').innerHTML = html;
-        })
+        }})
         .catch(()=> showToast('❌ خطا در دریافت تبادلات', 'error'));
-    }
+    }}
     
     function filterMyExchanges() {{
         var filter = document.getElementById('exchangePharmacyFilter').value.toLowerCase();
