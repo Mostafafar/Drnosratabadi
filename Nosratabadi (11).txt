@@ -2282,7 +2282,7 @@ def exchange():
             }}
         }})
         .then(r => r.json())
-        .then(data => {
+        .then(data => {{
             allMyExchanges = data.exchanges || [];
             renderMyExchangesList(allMyExchanges);
         }})
